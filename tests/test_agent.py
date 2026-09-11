@@ -6,7 +6,33 @@ import unittest
 from unittest.mock import patch, MagicMock
 
 from src.memory import ConversationBufferWindowMemory
+from src.rag_pipeline import build_retriever
 from src.tools import consultar_manual_operaciones, consultar_valor_uf_actual
+
+
+class TestRetrieval(unittest.TestCase):
+
+    def setUp(self):
+        self.retriever = build_retriever()
+
+    def test_accents_and_morphology_are_handled(self):
+        docs = self.retriever("cual es el limite para conducir", top_k=3)
+        joined = "\n".join(docs)
+        self.assertIn("5 horas", joined)
+
+    def test_synonyms_resolve_driving_query(self):
+        docs = self.retriever("cuantas horas puedo manejar", top_k=3)
+        joined = "\n".join(docs)
+        self.assertIn("5 horas", joined)
+
+    def test_accentless_query_returns_tow_truck(self):
+        docs = self.retriever("numero de grua", top_k=3)
+        joined = "\n".join(docs)
+        self.assertIn("800-500-100", joined)
+
+    def test_unknown_topic_returns_no_results(self):
+        docs = self.retriever("politica de viaticos", top_k=3)
+        self.assertEqual(docs, [])
 
 
 class TestConsultarManualOperaciones(unittest.TestCase):

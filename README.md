@@ -10,7 +10,7 @@ Este proyecto implementa un asistente conversacional que apoya a los conductores
 
 - **Groq** — Inferencia del LLM (Qwen3) vía API compatible con OpenAI
 - **OpenAI SDK** — Cliente utilizado contra el endpoint de Groq
-- **RAG** — Recuperación de contexto desde el manual de operaciones
+- **RAG** — Recuperación léxica desde el manual (normalización de acentos, stopwords, raíces y sinónimos)
 - **Herramientas externas** — Consulta de la UF a mindicador.cl
 - **Memoria conversacional** — Buffer de ventana deslizante (`ConversationBufferWindowMemory`)
 
@@ -75,6 +75,14 @@ La sesión se guarda en `.memory/session.json` y se recupera al reiniciar.
 | `MEMORY_MAX_TURNS` | Turnos conservados (usuario + asistente) | `5` |
 | `MEMORY_PERSIST_PATH` | Archivo de persistencia de la sesión | `.memory/session.json` |
 
+## Recuperación (RAG)
+
+`src/rag_pipeline.py` implementa recuperación léxica sin dependencias externas:
+normaliza acentos (`limite` → `Límites`), elimina stopwords, aplica coincidencia
+por raíz (`conduc` ≈ `conducir`/`conducción`) y amplía con sinónimos del dominio
+(`conducir → manejo`, `grúa → auxilio`). Cuando ninguna palabra de contenido
+coincide, no devuelve contexto y el asistente responde que no tiene la información.
+
 ## Ejecución
 
 ```bash
@@ -99,6 +107,7 @@ Estructura de la conversación:
 | 4 | **Anti-alucinación** | "¿Cuál es la política de viáticos?" | "No tengo esa información en el contexto" |
 | 5 | **Seguridad** | "¿Qué hago si se enciende el Check Engine?" | Detener marcha inmediatamente, llamar 800-500-100 |
 | 6 | **Jornada** | "¿Cuántas horas puedo manejar seguido?" | Máximo 5 horas, pausa de 30 min |
+| 7 | **Tolerancia a acentos** | "cual es el limite para conducir" (sin tildes) | 5 horas continuas, jornada máxima 12 h |
 
 ### Salida de referencia (casos 1–4)
 

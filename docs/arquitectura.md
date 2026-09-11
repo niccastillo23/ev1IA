@@ -7,7 +7,7 @@ flowchart TD
     A[Chofer] -->|Escribe consulta en español| B[Interfaz CLI]
     B -->|Input + historial| C[Agente Orquestador<br/>Groq - Qwen3]
 
-    C -->|Paso 1: Recuperación| D[Retriever Híbrido<br/>keyword scoring top-k]
+    C -->|Paso 1: Recuperación| D[Retriever Léxico<br/>normalización + stopwords<br/>+ raíces + sinónimos]
     C -->|Paso 3: Tool externa| E[consultar_valor_uf_actual]
 
     D -->|Chunks relevantes| F[(manual_operaciones<br/>.txt)]
@@ -30,7 +30,7 @@ flowchart TD
 |---|---|
 | **Interfaz CLI** | Bucle interactivo que captura la entrada del chofer y muestra la respuesta. Mantiene el historial de mensajes por sesión. |
 | **Agente Orquestador** | Modelo Qwen3 servido por Groq (API compatible con OpenAI). Temperatura 0.1 para respuestas deterministas y `reasoning_effort="none"` para desactivar el razonamiento extendido. |
-| **Retriever Híbrido** | Carga el manual, lo divide por secciones y puntúa cada chunk según coincidencia de palabras clave con la consulta, devolviendo los top-k más relevantes. |
+| **Retriever léxico** | Carga el manual, lo divide por secciones y puntúa cada chunk combinando **normalización de acentos**, **stopwords**, **raíces (prefijos)** y un **mapa de sinónimos** del dominio. Devuelve los top-k más relevantes y vacío si no hay coincidencias de contenido. |
 | **Base de conocimiento** | `data/manual_operaciones_logistica.txt` con 6 secciones (fallas, siniestros, jornada, mantenimiento, combustible, talleres). |
 | **consultar_valor_uf_actual** | Consulta la API externa mindicador.cl para obtener el valor vigente de la UF. Incluye User-Agent, timeouts y reintentos. |
 | **API mindicador.cl** | Servicio público chileno que entrega indicadores económicos diarios, incluyendo el valor de la UF. |
@@ -54,6 +54,24 @@ Parámetros configurables (en `.env`):
 |---|---|---|
 | `MEMORY_MAX_TURNS` | Número de intercambios (usuario + asistente) que se conservan | `5` |
 | `MEMORY_PERSIST_PATH` | Ruta del archivo de persistencia de la sesión | `.memory/session.json` |
+
+## Recuperación (RAG léxico)
+
+`src/rag_pipeline.py` implementa recuperación **sin dependencias externas**:
+
+1. **Normalización**: minúsculas y eliminación de acentos (`unicodedata`), de modo
+   que `limite` coincida con `Límites`.
+2. **Stopwords**: se descartan palabras vacías (`el`, `es`, `para`, `cual`…), que
+   antes dominaban el puntaje y desplazaban a la sección correcta.
+3. **Raíces / prefijos**: coincidencia parcial (`conduc` une `conducir` y
+   `conducción`; `grua` une `grúa` y `gruas`).
+4. **Sinónimos de dominio**: `conducir → manejo`, `límite → máximo/tope`,
+   `grúa → auxilio/remolque`, etc.
+5. **Ponderación de título**: una coincidencia en el título de la sección suma
+   puntaje extra.
+
+Si ninguna palabra de contenido coincide, se devuelve una lista vacía y el
+agente responde que no tiene la información (comportamiento anti-alucinación).
 
 ## Flujo de Ejecución
 
