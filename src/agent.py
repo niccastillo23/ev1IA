@@ -25,6 +25,7 @@ REGLAS ESTRICTAS:
 2. Responde siempre en espanol de forma clara, concisa y profesional.
 3. Si la pregunta no esta relacionada con seguros, indica amablemente que solo puedes asistir con temas de la compania.
 4. Responde de forma directa, sin mostrar tu razonamiento interno.
+5. Si el usuario pide una cantidad de UF (por ejemplo "5 UF"), multiplica el valor de la UF entregado en el contexto por esa cantidad y muestra el resultado en pesos. NO inventes el valor de la UF: usa siempre el que viene en el contexto.
 """
 
 THINK_PATTERN = re.compile(r"<think>.*?</think>", re.DOTALL)
@@ -56,7 +57,7 @@ def build_messages(query, context, conversation_history):
 
 Pregunta: {query}
 
-Responde basandote unicamente en el contexto proporcionado. Si la informacion no esta en el contexto, indica que no tienes esa informacion. Responde directamente, sin razonamiento interno."""
+Responde basandote unicamente en el contexto proporcionado. Si el usuario pide una cantidad de UF (por ejemplo "5 UF"), multiplica el valor de la UF del contexto por esa cantidad. Si la informacion no esta en el contexto, indica que no tienes esa informacion. Responde directamente, sin razonamiento interno."""
     else:
         prompt = f"""Pregunta: {query}
 
