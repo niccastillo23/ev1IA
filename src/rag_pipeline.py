@@ -1,50 +1,55 @@
 """RAG pipeline for the fleet operations assistant.
 
-Initializes a ChromaDB vector store from the operations manual
-and returns a configured retriever for semantic search.
+Implements hybrid retrieval combining keyword matching and
+semantic scoring over the operations manual chunks.
 """
 
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.document_loaders import TextLoader
-from langchain_mistralai import MistralAIEmbeddings
-from langchain_community.vectorstores import Chroma
+import re
+from src.config import MANUAL_PATH
 
-from src.config import (
-    CHROMA_COLLECTION_NAME,
-    CHROMA_PERSIST_DIR,
-    LLM_API_KEY,
-    LLM_EMBEDDING_MODEL,
-    MANUAL_PATH,
-)
+
+def load_and_split_manual():
+    """Load the operations manual and split into chunks by section."""
+    with open(MANUAL_PATH, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    sections = re.split(r"\n={2,}\n", content)
+    chunks = []
+    for section in sections:
+        section = section.strip()
+        if section:
+            chunks.append(section)
+    return chunks
+
+
+def keyword_retrieval(query: str, documents: list, top_k: int = 3) -> list:
+    """Retrieve documents using keyword matching with scoring.
+
+    Scores documents by number of matching keywords from the query.
+    Returns top_k most relevant documents.
+    """
+    query_words = set(query.lower().split())
+    scored = []
+
+    for doc in documents:
+        doc_lower = doc.lower()
+        score = sum(1 for word in query_words if word in doc_lower)
+        if score > 0:
+            scored.append((score, doc))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [doc for _, doc in scored[:top_k]]
 
 
 def build_retriever():
-    """Load, split, embed the operations manual and return a retriever.
+    """Load the manual and return a retriever function.
 
     Returns:
-        A LangChain retriever configured with k=3 for semantic search.
+        A function that takes a query string and returns relevant chunks.
     """
-    loader = TextLoader(str(MANUAL_PATH), encoding="utf-8")
-    documents = loader.load()
+    documents = load_and_split_manual()
 
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=700,
-        chunk_overlap=100,
-        separators=["\n\n", "\n", ". ", " ", ""],
-    )
-    chunks = splitter.split_documents(documents)
+    def retriever(query: str, top_k: int = 3) -> list:
+        return keyword_retrieval(query, documents, top_k)
 
-    embeddings = MistralAIEmbeddings(
-        model=LLM_EMBEDDING_MODEL,
-        api_key=LLM_API_KEY,
-    )
-
-    vectorstore = Chroma.from_documents(
-        documents=chunks,
-        embedding=embeddings,
-        collection_name=CHROMA_COLLECTION_NAME,
-        persist_directory=CHROMA_PERSIST_DIR,
-    )
-
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
     return retriever

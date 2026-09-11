@@ -1,94 +1,163 @@
 """Conversational agent for fleet operations support.
 
-Builds a LangGraph agent with tool calling, conversational memory,
-and a strict system prompt to minimize hallucinations.
+Uses Groq (via OpenAI-compatible API) with RAG and conversational memory.
+Follows the pattern from the course notebook.
 """
 
-from langchain_core.messages import HumanMessage, SystemMessage
-from langchain.agents import create_agent
-from langchain_mistralai import ChatMistralAI
-from langgraph.checkpoint.memory import MemorySaver
+import re
+import time
 
-from src.config import LLM_API_KEY, LLM_MODEL
-from src.tools import consultar_manual_operaciones, consultar_valor_uf_actual
+from openai import OpenAI
+
+from src.config import LLM_API_KEY, LLM_BASE_URL, LLM_MODEL
+from src.rag_pipeline import build_retriever
+from src.tools import consultar_valor_uf_actual
 
 SYSTEM_PROMPT = """\
-Eres el Asistente Inteligente de Operaciones y Flota de Logística Express S.A.
-Tu rol es apoyar a los conductores con consultas sobre el manual de operaciones,
-protocolos de seguridad, mantenimiento, jornada laboral, combustible y talleres
-autorizados.
+/no_think
+Eres el Asistente Inteligente de Operaciones y Flota de Logistica Express S.A.
+Tu rol es apoyar a los conductores con consultas sobre el manual de operaciones.
 
 REGLAS ESTRICTAS:
-1. Consulta SIEMPRE el manual de operaciones usando la herramienta
-   'consultar_manual_operaciones' antes de responder cualquier pregunta
-   sobre procedimientos internos.
-2. Si la información no se encuentra en las fuentes (manual o API externa),
-   declara explícitamente que no se encuentra disponible. NO inventes ni
-   alucines información.
-3. Para consultas sobre valores económicos en UF, usa la herramienta
-   'consultar_valor_uf_actual' para obtener el valor vigente.
-4. Responde siempre en español de forma clara, concisa y profesional.
-5. Si la pregunta no está relacionada con operaciones de flota, indica
-   amablemente que solo puedes asistir con temas de la empresa.
-
-Prioridad de consulta: primero el manual, luego la UF si aplica.\
+1. Usa el contexto proporcionado para responder. Si la informacion no esta en el contexto, indica que no tienes esa informacion. NO inventes.
+2. Responde siempre en espanol de forma clara, concisa y profesional.
+3. Si la pregunta no esta relacionada con operaciones de flota, indica amablemente que solo puedes asistir con temas de la empresa.
+4. Responde de forma directa, sin mostrar tu razonamiento interno.
 """
 
+THINK_PATTERN = re.compile(r"<think>.*?</think>", re.DOTALL)
 
-def build_agent():
-    """Create and return the agent with tools and memory."""
-    llm = ChatMistralAI(
-        model=LLM_MODEL,
+
+def initialize_client():
+    """Create Groq client via OpenAI-compatible API."""
+    return OpenAI(
+        base_url=LLM_BASE_URL,
         api_key=LLM_API_KEY,
-        temperature=0.1,
     )
 
-    tools = [consultar_manual_operaciones, consultar_valor_uf_actual]
 
-    memory = MemorySaver()
+def clean_response(content: str) -> str:
+    """Remove reasoning blocks (closed or truncated) from the response."""
+    if not content:
+        return ""
+    content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL)
+    if "<think>" in content:
+        content = content.split("<think>")[0]
+    return content.strip()
 
-    agent = create_agent(
-        model=llm,
-        tools=tools,
-        system_prompt=SystemMessage(content=SYSTEM_PROMPT),
-        checkpointer=memory,
+
+def build_messages(query, context, conversation_history):
+    """Build the message list including retrieved context and memory."""
+    if context:
+        prompt = f"""Contexto:
+{context}
+
+Pregunta: {query}
+
+Responde basandote unicamente en el contexto proporcionado. Si la informacion no esta en el contexto, indica que no tienes esa informacion. Responde directamente, sin razonamiento interno."""
+    else:
+        prompt = f"""Pregunta: {query}
+
+Responde basandote en tu conocimiento general. Si no tienes informacion, indicarlo claramente. Responde directamente, sin razonamiento interno."""
+
+    return (
+        [{"role": "system", "content": SYSTEM_PROMPT}]
+        + conversation_history
+        + [{"role": "user", "content": prompt}]
     )
-    return agent
+
+
+def generate_response(client, query, context, conversation_history=None, retries=3):
+    """Call the LLM with retry logic for rate limits."""
+    conversation_history = conversation_history or []
+    messages = build_messages(query, context, conversation_history)
+
+    for attempt in range(retries):
+        try:
+            response = client.chat.completions.create(
+                model=LLM_MODEL,
+                messages=messages,
+                temperature=0.1,
+                max_tokens=600,
+                reasoning_effort="none",
+            )
+            content = response.choices[0].message.content or ""
+            return clean_response(content)
+        except TypeError:
+            # Provider does not accept reasoning_effort; retry without it.
+            response = client.chat.completions.create(
+                model=LLM_MODEL,
+                messages=messages,
+                temperature=0.1,
+                max_tokens=600,
+            )
+            content = response.choices[0].message.content or ""
+            return clean_response(content)
+        except Exception as e:
+            if "429" in str(e) and attempt < retries - 1:
+                wait = (attempt + 1) * 15
+                print(f"  Rate limit. Reintentando en {wait}s... ({attempt + 2}/{retries})")
+                time.sleep(wait)
+            else:
+                raise
+
+
+def detect_uf_query(query: str) -> bool:
+    """Detect if the query is about UF value or requires currency conversion."""
+    uf_keywords = [
+        "uf",
+        "unidad de fomento",
+        "valor uf",
+        "cuanto vale la uf",
+        "precio uf",
+        "en pesos",
+        "a pesos",
+        "en clp",
+        "en dinero",
+        "equivalente en pesos",
+    ]
+    return any(kw in query.lower() for kw in uf_keywords)
 
 
 def main():
     """Run the interactive CLI loop with conversational memory."""
     print("=" * 60)
-    print("  Asistente de Operaciones y Flota - Logística Express")
+    print("  Asistente de Operaciones y Flota - Logistica Express")
     print("=" * 60)
     print("Escribe 'salir' o 'exit' para terminar.\n")
 
-    agent = build_agent()
-    config = {"configurable": {"thread_id": "session-1"}}
+    client = initialize_client()
+    retriever = build_retriever()
+    conversation_history = []
 
     while True:
         try:
-            user_input = input("🧑 Chofer: ").strip()
+            user_input = input("  Chofer: ").strip()
         except (EOFError, KeyboardInterrupt):
-            print("\n👋 Sesión finalizada.")
+            print("\n  Sesion finalizada.")
             break
 
         if user_input.lower() in ("salir", "exit"):
-            print("👋 Sesión finalizada.")
+            print("  Sesion finalizada.")
             break
 
         if not user_input:
             continue
 
+        relevant_docs = retriever(user_input, top_k=3)
+        context = "\n".join(relevant_docs) if relevant_docs else ""
+
+        if detect_uf_query(user_input):
+            uf_info = consultar_valor_uf_actual()
+            context = f"{context}\n\nInformacion economica: {uf_info}" if context else uf_info
+
         try:
-            result = agent.invoke(
-                {"messages": [HumanMessage(content=user_input)]},
-                config=config,
-            )
-            last_message = result["messages"][-1]
-            print(f"\n🚛 Asistente: {last_message.content}\n")
+            response = generate_response(client, user_input, context, conversation_history)
+            print(f"\n  Asistente: {response}\n")
+            conversation_history.append({"role": "user", "content": user_input})
+            conversation_history.append({"role": "assistant", "content": response})
         except Exception as exc:
-            print(f"\n⚠️  Error: {exc}\n")
+            print(f"\n  Error: {exc}\n")
 
 
 if __name__ == "__main__":

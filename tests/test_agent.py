@@ -10,18 +10,18 @@ class TestConsultarManualOperaciones(unittest.TestCase):
 
     @patch("src.tools._get_retriever")
     def test_returns_results_for_valid_query(self, mock_retriever):
-        mock_doc = MagicMock()
-        mock_doc.page_content = "Llamar al 800-500-100 en caso de falla."
-        mock_retriever.return_value.invoke.return_value = [mock_doc]
+        mock_retriever.return_value = lambda q, top_k=3: [
+            "Llamar al 800-500-100 en caso de falla mecanica."
+        ]
 
-        result = consultar_manual_operaciones.invoke("número de grúa")
+        result = consultar_manual_operaciones("numero de grua")
         self.assertIn("800-500-100", result)
 
     @patch("src.tools._get_retriever")
     def test_returns_no_results_message_when_empty(self, mock_retriever):
-        mock_retriever.return_value.invoke.return_value = []
+        mock_retriever.return_value = lambda q, top_k=3: []
 
-        result = consultar_manual_operaciones.invoke("tema inexistente")
+        result = consultar_manual_operaciones("tema inexistente")
         self.assertIn("No se encontraron resultados", result)
 
 
@@ -39,7 +39,7 @@ class TestConsultarValorUFActual(unittest.TestCase):
         mock_response.raise_for_status = MagicMock()
         mock_get.return_value = mock_response
 
-        result = consultar_valor_uf_actual.invoke("")
+        result = consultar_valor_uf_actual()
         self.assertIn("$38,500.50", result)
         self.assertIn("CLP", result)
 
@@ -48,7 +48,7 @@ class TestConsultarValorUFActual(unittest.TestCase):
         import requests as req
         mock_get.side_effect = req.exceptions.Timeout()
 
-        result = consultar_valor_uf_actual.invoke("")
+        result = consultar_valor_uf_actual()
         self.assertIn("timeout", result.lower())
 
     @patch("src.tools.requests.get")
@@ -56,7 +56,7 @@ class TestConsultarValorUFActual(unittest.TestCase):
         import requests as req
         mock_get.side_effect = req.exceptions.ConnectionError("refused")
 
-        result = consultar_valor_uf_actual.invoke("")
+        result = consultar_valor_uf_actual()
         self.assertIn("Error", result)
 
 

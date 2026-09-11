@@ -1,6 +1,6 @@
 # Asistente Inteligente de Operaciones y Flota — Logística Express
 
-> Proyecto académico evaluado: Sistema de IA conversacional con LangChain, RAG híbrido, Tool Calling y memoria conversacional para soporte a conductores de flota logística.
+> Proyecto académico evaluado: Asistente conversacional con RAG, integración de herramientas externas y memoria conversacional para soporte a conductores de flota logística.
 
 ## Descripción
 
@@ -8,18 +8,18 @@ Este proyecto implementa un asistente conversacional que apoya a los conductores
 
 ### Tecnologías
 
-- **LangChain** — Framework de orquestación de agentes
-- **Mistral AI** — LLM (tool calling) + embeddings
-- **ChromaDB** — Vectorstore para RAG semántico
-- **Tool Calling** — El agente decide qué herramienta invocar
+- **Groq** — Inferencia del LLM (Qwen3) vía API compatible con OpenAI
+- **OpenAI SDK** — Cliente utilizado contra el endpoint de Groq
+- **RAG** — Recuperación de contexto desde el manual de operaciones
+- **Herramientas externas** — Consulta de la UF a mindicador.cl
 - **Memoria conversacional** — Historial de mensajes por sesión
 
 ## Arquitectura
 
 ```
-Chofer → CLI → Agente (Mistral) ↔ Memoria Conversacional
+Chofer → CLI → Agente (Qwen3 vía Groq) ↔ Memoria Conversacional
                       │
-                      ├── consultar_manual_operaciones → ChromaDB (RAG)
+                      ├── Retriever → manual_operaciones_logistica.txt (RAG)
                       └── consultar_valor_uf_actual → mindicador.cl (API)
 ```
 
@@ -28,7 +28,7 @@ Ver [docs/arquitectura.md](docs/arquitectura.md) para el diagrama completo en Me
 ## Requisitos Previos
 
 - Python 3.10+
-- API key de Mistral AI ([console.mistral.ai](https://console.mistral.ai/))
+- API key de Groq ([console.groq.com](https://console.groq.com/))
 
 ## Instalación
 
@@ -46,40 +46,63 @@ pip install -r requirements.txt
 
 # 4. Configurar variables de entorno
 cp .env.example .env
-# Editar .env y agregar tu LLM_API_KEY
+# Editar .env y agregar tu LLM_API_KEY de Groq
 ```
 
 ### Archivo `.env`
 
 ```env
-LLM_API_KEY=tu-api-key-aqui
-LLM_MODEL=mistral-small-latest
-LLM_EMBEDDING_MODEL=mistral-embed
-CHROMA_COLLECTION_NAME=fleet_operations
-CHROMA_PERSIST_DIR=.chroma
+LLM_API_KEY=tu-api-key-de-groq
+LLM_BASE_URL=https://api.groq.com/openai/v1
+LLM_MODEL=qwen/qwen3.6-27b
+LLM_MODEL_SMALL=qwen/qwen3.8-27b
 ```
 
 ## Ejecución
 
 ```bash
-python src/agent.py
+PYTHONPATH=. python src/agent.py
+```
+
+Estructura de la conversación:
+
+```
+  Chofer: ¿Cuál es el número para pedir grúa?
+  Asistente: El número ... es 800-500-100.
+  Chofer: salir
 ```
 
 ## Casos de Prueba
 
-| # | Tipo | Pregunta de Ejemplo | Herramienta Esperada | Resultado Esperado |
-|---|------|---------------------|---------------------|-------------------|
-| 1 | **Consulta interna** | "¿Cuál es el número para pedir grúa?" | `consultar_manual_operaciones` | 800-500-100, cobertura hasta 120 km |
-| 2 | **Memoria multicanal** | "¿Cuánto es el deducible?" → "¿Y cuánto es en pesos?" | `consultar_manual_operaciones` → `consultar_valor_uf_actual` | 5 UF → valor en CLP calculado |
-| 3 | **Cálculo externo** | "¿Cuánto vale la UF hoy?" | `consultar_valor_uf_actual` | Valor actualizado desde mindicador.cl |
-| 4 | **Anti-alucinación** | "¿Cuál es la política de viáticos?" | `consultar_manual_operaciones` | "No se encuentra en el manual" |
-| 5 | **Seguridad** | "¿Qué hago si se enciende el Check Engine?" | `consultar_manual_operaciones` | Detener marcha inmediatamente, llamar 800-500-100 |
-| 6 | **Jornada** | "¿Cuántas horas puedo manejar seguido?" | `consultar_manual_operaciones` | Máximo 5 horas, pausa de 30 min |
+| # | Tipo | Pregunta de Ejemplo | Resultado Esperado |
+|---|------|---------------------|-------------------|
+| 1 | **Consulta interna** | "¿Cuál es el número para pedir grúa?" | 800-500-100 |
+| 2 | **Memoria multicanal** | "¿Cuánto es el deducible del seguro?" → "¿Y cuánto es eso en pesos?" | 5 UF → conversión a CLP con valor UF vigente |
+| 3 | **Cálculo externo** | "¿Cuánto vale la UF hoy?" | Valor actualizado desde mindicador.cl |
+| 4 | **Anti-alucinación** | "¿Cuál es la política de viáticos?" | "No tengo esa información en el contexto" |
+| 5 | **Seguridad** | "¿Qué hago si se enciende el Check Engine?" | Detener marcha inmediatamente, llamar 800-500-100 |
+| 6 | **Jornada** | "¿Cuántas horas puedo manejar seguido?" | Máximo 5 horas, pausa de 30 min |
+
+### Salida de referencia (casos 1–4)
+
+```
+  Chofer: ¿Cuál es el número para pedir grúa?
+  Asistente: El número para contactar a la Central de Operaciones ... es el 800-500-100.
+
+  Chofer: ¿Cuánto es el deducible del seguro?
+  Asistente: El deducible del seguro es de 5 UF por evento.
+
+  Chofer: ¿Y cuánto es eso en pesos?
+  Asistente: ... el monto en pesos es de $204,509.70 CLP.
+
+  Chofer: ¿Cuál es la política de viáticos?
+  Asistente: No tengo esa información en el contexto proporcionado.
+```
 
 ## Ejecutar Tests
 
 ```bash
-python -m pytest tests/ -v
+PYTHONPATH=. python -m unittest discover -s tests -v
 ```
 
 ## Estructura del Proyecto
@@ -92,12 +115,13 @@ python -m pytest tests/ -v
 ├── src/
 │   ├── __init__.py
 │   ├── config.py                          # Configuración y variables de entorno
-│   ├── rag_pipeline.py                    # Pipeline RAG con ChromaDB
-│   ├── tools.py                           # Herramientas LangChain
+│   ├── rag_pipeline.py                    # Recuperación de contexto (RAG)
+│   ├── tools.py                           # Herramientas (manual + UF)
 │   └── agent.py                           # Agente conversacional + CLI
 ├── tests/
 │   └── test_agent.py                      # Tests unitarios
 ├── .gitignore
+├── .env.example
 ├── requirements.txt
 └── README.md
 ```

@@ -1,12 +1,9 @@
-"""LangChain tools for the fleet operations assistant.
+"""Tools for the fleet operations assistant.
 
-Provides semantic search over the operations manual and
-real-time UF (Unidad de Fomento) value lookup.
+Provides manual search and real-time UF value lookup.
 """
 
 import requests
-from langchain_core.tools import tool
-
 from src.rag_pipeline import build_retriever
 
 _retriever = None
@@ -19,48 +16,59 @@ def _get_retriever():
     return _retriever
 
 
-@tool
 def consultar_manual_operaciones(consulta: str) -> str:
-    """Search the fleet operations manual for information about
-    mechanical failures, accidents, driving hours, maintenance,
-    fuel policy, or authorized workshops.
-
-    Args:
-        consulta: The user's question or search query in Spanish.
-
-    Returns:
-        Relevant excerpts from the operations manual.
-    """
+    """Search the fleet operations manual for relevant information."""
     retriever = _get_retriever()
-    docs = retriever.invoke(consulta)
+    docs = retriever(consulta, top_k=3)
     if not docs:
         return "No se encontraron resultados relevantes en el manual de operaciones."
     results = []
     for i, doc in enumerate(docs, 1):
-        results.append(f"[Fragmento {i}]\n{doc.page_content}")
+        results.append(f"[Fragmento {i}]\n{doc}")
     return "\n\n".join(results)
 
 
-@tool
-def consultar_valor_uf_actual() -> str:
-    """Fetch the current UF (Unidad de Fomento) value from the
-    mindicador.cl API and return it formatted in CLP.
-
-    Returns:
-        The current UF value with its date, formatted in CLP.
-    """
+def consultar_valor_uf_actual(reintentos: int = 3) -> str:
+    """Fetch the current UF value from mindicador.cl API with retries."""
     url = "https://mindicador.cl/api/uf"
-    try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        uf_value = data["uf"]["valor"]
-        uf_fecha = data["uf"]["fecha"]
-        formatted = f"${uf_value:,.2f} CLP"
-        return f"Valor UF al {uf_fecha}: {formatted}"
-    except requests.exceptions.Timeout:
-        return "Error: timeout al consultar el valor de la UF. Intente nuevamente."
-    except requests.exceptions.RequestException as exc:
-        return f"Error al consultar el valor de la UF: {exc}"
-    except (KeyError, ValueError) as exc:
-        return f"Error al procesar la respuesta de la API: {exc}"
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; LogisticaExpressBot/1.0)"}
+    ultimo_error = "sin respuesta"
+
+    for intento in range(reintentos):
+        try:
+            response = requests.get(url, headers=headers, timeout=20)
+            response.raise_for_status()
+            data = response.json()
+
+            # Current API format: {"serie": [{"fecha": ..., "valor": ...}, ...]}
+            if "serie" in data and data["serie"]:
+                uf_value = data["serie"][0]["valor"]
+                uf_fecha = data["serie"][0]["fecha"]
+            else:
+                # Legacy format fallback: {"uf": {"valor": ..., "fecha": ...}}
+                uf_value = data["uf"]["valor"]
+                uf_fecha = data["uf"]["fecha"]
+
+            fecha_corta = str(uf_fecha)[:10]
+            formatted = f"${uf_value:,.2f} CLP"
+            return f"Valor UF al {fecha_corta}: {formatted}"
+        except requests.exceptions.Timeout:
+            ultimo_error = "timeout"
+        except requests.exceptions.RequestException as exc:
+            ultimo_error = f"error de conexion: {exc}"
+        except (KeyError, IndexError, ValueError) as exc:
+            ultimo_error = f"formato inesperado: {exc}"
+
+    return f"Error al consultar el valor de la UF tras {reintentos} intentos ({ultimo_error})."
+
+
+TOOLS = {
+    "consultar_manual_operaciones": consultar_manual_operaciones,
+    "consultar_valor_uf_actual": consultar_valor_uf_actual,
+}
+
+TOOL_DESCRIPTIONS = """
+Herramientas disponibles:
+- consultar_manual_operaciones(consulta: str): Busca informacion en el manual de operaciones de Logistica Express. Usa para preguntas sobre procedimientos, fallas mecanicas, siniestros, jornada laboral, mantenimiento, combustible o talleres.
+- consultar_valor_uf_actual(): Obtiene el valor actual de la UF (Unidad de Fomento) desde la API mindicador.cl. Usa para consultas economicas que involucren UF.
+"""
