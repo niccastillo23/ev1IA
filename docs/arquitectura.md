@@ -34,7 +34,26 @@ flowchart TD
 | **Base de conocimiento** | `data/manual_operaciones_logistica.txt` con 6 secciones (fallas, siniestros, jornada, mantenimiento, combustible, talleres). |
 | **consultar_valor_uf_actual** | Consulta la API externa mindicador.cl para obtener el valor vigente de la UF. Incluye User-Agent, timeouts y reintentos. |
 | **API mindicador.cl** | Servicio público chileno que entrega indicadores económicos diarios, incluyendo el valor de la UF. |
-| **Memoria conversacional** | Lista `conversation_history` con los turnos previos que se inyecta en cada llamada al LLM. |
+| **Memoria conversacional** | **Buffer de ventana deslizante** (`ConversationBufferWindowMemory`) que conserva los últimos `MEMORY_MAX_TURNS` turnos (por defecto 5) y descarta los más antiguos. Se persiste en `.memory/session.json` para sobrevivir entre ejecuciones. |
+
+## Tipo de memoria: Buffer de ventana deslizante
+
+La memoria implementada en `src/memory.py` es un **buffer de ventana deslizante**
+(`ConversationBufferWindowMemory`). Se eligió este tipo porque:
+
+- **Acota el contexto**: mantiene solo los últimos `N` intercambios, evitando que
+  el prompt crezca indefinidamente y dispare costos o límites de tokens.
+- **Conversación multi-turno**: permite resolver referencias como *"¿y eso en pesos?"*,
+  que dependen del turno anterior.
+- **Persistencia opcional**: guarda la sesión en disco (`.memory/session.json`),
+  de modo que el hilo conversacional se recupera al reiniciar.
+
+Parámetros configurables (en `.env`):
+
+| Variable | Descripción | Default |
+|---|---|---|
+| `MEMORY_MAX_TURNS` | Número de intercambios (usuario + asistente) que se conservan | `5` |
+| `MEMORY_PERSIST_PATH` | Ruta del archivo de persistencia de la sesión | `.memory/session.json` |
 
 ## Flujo de Ejecución
 

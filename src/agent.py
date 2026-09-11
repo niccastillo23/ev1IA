@@ -10,6 +10,7 @@ import time
 from openai import OpenAI
 
 from src.config import LLM_API_KEY, LLM_BASE_URL, LLM_MODEL
+from src.memory import build_memory
 from src.rag_pipeline import build_retriever
 from src.tools import consultar_valor_uf_actual
 
@@ -128,16 +129,18 @@ def main():
 
     client = initialize_client()
     retriever = build_retriever()
-    conversation_history = []
+    memory = build_memory()
 
     while True:
         try:
             user_input = input("  Chofer: ").strip()
         except (EOFError, KeyboardInterrupt):
+            memory.save()
             print("\n  Sesion finalizada.")
             break
 
         if user_input.lower() in ("salir", "exit"):
+            memory.save()
             print("  Sesion finalizada.")
             break
 
@@ -152,10 +155,10 @@ def main():
             context = f"{context}\n\nInformacion economica: {uf_info}" if context else uf_info
 
         try:
-            response = generate_response(client, user_input, context, conversation_history)
+            response = generate_response(client, user_input, context, memory.get_history())
             print(f"\n  Asistente: {response}\n")
-            conversation_history.append({"role": "user", "content": user_input})
-            conversation_history.append({"role": "assistant", "content": response})
+            memory.add_user(user_input)
+            memory.add_assistant(response)
         except Exception as exc:
             print(f"\n  Error: {exc}\n")
 

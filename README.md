@@ -12,7 +12,7 @@ Este proyecto implementa un asistente conversacional que apoya a los conductores
 - **OpenAI SDK** — Cliente utilizado contra el endpoint de Groq
 - **RAG** — Recuperación de contexto desde el manual de operaciones
 - **Herramientas externas** — Consulta de la UF a mindicador.cl
-- **Memoria conversacional** — Historial de mensajes por sesión
+- **Memoria conversacional** — Buffer de ventana deslizante (`ConversationBufferWindowMemory`)
 
 ## Arquitectura
 
@@ -56,7 +56,24 @@ LLM_API_KEY=tu-api-key-de-groq
 LLM_BASE_URL=https://api.groq.com/openai/v1
 LLM_MODEL=qwen/qwen3.6-27b
 LLM_MODEL_SMALL=qwen/qwen3.8-27b
+
+# Memoria conversacional (ventana deslizante)
+MEMORY_MAX_TURNS=5
+MEMORY_PERSIST_PATH=.memory/session.json
 ```
+
+## Memoria Conversacional
+
+El asistente utiliza una **memoria de buffer de ventana deslizante**
+(`ConversationBufferWindowMemory`, en `src/memory.py`). Conserva los últimos
+`MEMORY_MAX_TURNS` intercambios (5 por defecto) y descarta los más antiguos,
+lo que permite conversaciones multi-turno sin que el contexto crezca sin límite.
+La sesión se guarda en `.memory/session.json` y se recupera al reiniciar.
+
+| Variable | Descripción | Default |
+|---|---|---|
+| `MEMORY_MAX_TURNS` | Turnos conservados (usuario + asistente) | `5` |
+| `MEMORY_PERSIST_PATH` | Archivo de persistencia de la sesión | `.memory/session.json` |
 
 ## Ejecución
 
@@ -115,6 +132,7 @@ PYTHONPATH=. python -m unittest discover -s tests -v
 ├── src/
 │   ├── __init__.py
 │   ├── config.py                          # Configuración y variables de entorno
+│   ├── memory.py                          # Memoria (buffer de ventana deslizante)
 │   ├── rag_pipeline.py                    # Recuperación de contexto (RAG)
 │   ├── tools.py                           # Herramientas (manual + UF)
 │   └── agent.py                           # Agente conversacional + CLI

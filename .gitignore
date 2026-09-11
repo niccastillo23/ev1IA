@@ -9,9 +9,9 @@ __pycache__/
 *$py.class
 *.so
 
-# ChromaDB persistent storage
-.chroma/
-chroma/
+# Conversational memory sessions
+.memory/
+*.memory
 
 # Virtual environments
 .venv/

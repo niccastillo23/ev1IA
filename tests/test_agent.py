@@ -1,8 +1,11 @@
 """Tests for the fleet operations agent tools and RAG pipeline."""
 
+import os
+import tempfile
 import unittest
 from unittest.mock import patch, MagicMock
 
+from src.memory import ConversationBufferWindowMemory
 from src.tools import consultar_manual_operaciones, consultar_valor_uf_actual
 
 
@@ -58,6 +61,39 @@ class TestConsultarValorUFActual(unittest.TestCase):
 
         result = consultar_valor_uf_actual()
         self.assertIn("Error", result)
+
+
+class TestConversationBufferWindowMemory(unittest.TestCase):
+
+    def test_trims_to_window_size(self):
+        memory = ConversationBufferWindowMemory(max_turns=2)
+        for i in range(5):
+            memory.add_user(f"pregunta {i}")
+            memory.add_assistant(f"respuesta {i}")
+
+        history = memory.get_history()
+        self.assertEqual(len(history), 4)
+        self.assertEqual(history[0]["content"], "pregunta 3")
+        self.assertEqual(history[-1]["content"], "respuesta 4")
+
+    def test_clear_resets_buffer(self):
+        memory = ConversationBufferWindowMemory(max_turns=3)
+        memory.add_user("hola")
+        memory.add_assistant("hola, ¿en qué ayudo?")
+        memory.clear()
+        self.assertEqual(memory.get_history(), [])
+
+    def test_save_and_load_roundtrip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "session.json")
+            memory = ConversationBufferWindowMemory(max_turns=3, persist_path=path)
+            memory.add_user("pregunta")
+            memory.add_assistant("respuesta")
+            memory.save()
+
+            restored = ConversationBufferWindowMemory(max_turns=3, persist_path=path)
+            restored.load()
+            self.assertEqual(restored.get_history(), memory.get_history())
 
 
 if __name__ == "__main__":

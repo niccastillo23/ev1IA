@@ -18,3 +18,7 @@ LLM_MODEL_SMALL = os.getenv("LLM_MODEL_SMALL", "qwen/qwen3-30b-a3b")
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 MANUAL_PATH = PROJECT_ROOT / "data" / "manual_operaciones_logistica.txt"
+
+# Conversational memory: sliding-window buffer (ConversationBufferWindowMemory)
+MEMORY_MAX_TURNS = int(os.getenv("MEMORY_MAX_TURNS", "5"))
+MEMORY_PERSIST_PATH = os.getenv("MEMORY_PERSIST_PATH", ".memory/session.json")
