@@ -85,6 +85,18 @@ coincide, no devuelve contexto y el asistente responde que no tiene la informaci
 
 ## Ejecución
 
+### Opción 1 — Interfaz web (Streamlit, recomendada)
+
+```bash
+streamlit run app.py
+```
+
+Abre `http://localhost:8501` en el navegador. Incluye burbujas de chat,
+preguntas rápidas, panel de **Fuentes consultadas** (fragmentos del manual y
+llamada a la UF) y botón para limpiar la conversación.
+
+### Opción 2 — Línea de comandos (CLI)
+
 ```bash
 PYTHONPATH=. python src/agent.py
 ```
@@ -138,13 +150,16 @@ PYTHONPATH=. python -m unittest discover -s tests -v
 │   └── manual_operaciones_logistica.txt   # Manual de operaciones
 ├── docs/
 │   └── arquitectura.md                    # Documentación técnica
+├── app.py                                 # Interfaz web (Streamlit)
+├── .streamlit/
+│   └── config.toml                        # Tema visual de la app web
 ├── src/
 │   ├── __init__.py
 │   ├── config.py                          # Configuración y variables de entorno
 │   ├── memory.py                          # Memoria (buffer de ventana deslizante)
 │   ├── rag_pipeline.py                    # Recuperación de contexto (RAG)
 │   ├── tools.py                           # Herramientas (manual + UF)
-│   └── agent.py                           # Agente conversacional + CLI
+│   └── agent.py                           # Pipeline del agente + CLI
 ├── tests/
 │   └── test_agent.py                      # Tests unitarios
 ├── .gitignore

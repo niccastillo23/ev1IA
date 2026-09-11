@@ -4,7 +4,7 @@
 
 ```mermaid
 flowchart TD
-    A[Chofer] -->|Escribe consulta en español| B[Interfaz CLI]
+    A[Chofer] -->|Escribe consulta en español| B[Interfaz<br/>Web Streamlit / CLI]
     B -->|Input + historial| C[Agente Orquestador<br/>Groq - Qwen3]
 
     C -->|Paso 1: Recuperación| D[Retriever Léxico<br/>normalización + stopwords<br/>+ raíces + sinónimos]
@@ -28,7 +28,7 @@ flowchart TD
 
 | Componente | Descripción |
 |---|---|
-| **Interfaz CLI** | Bucle interactivo que captura la entrada del chofer y muestra la respuesta. Mantiene el historial de mensajes por sesión. |
+| **Interfaz (Web / CLI)** | La web (`app.py`, Streamlit) y la CLI (`src/agent.py`) comparten el mismo pipeline. La web muestra burbujas de chat, preguntas rápidas y un panel de **Fuentes consultadas**; la memoria vive en `st.session_state` por sesión de navegador. |
 | **Agente Orquestador** | Modelo Qwen3 servido por Groq (API compatible con OpenAI). Temperatura 0.1 para respuestas deterministas y `reasoning_effort="none"` para desactivar el razonamiento extendido. |
 | **Retriever léxico** | Carga el manual, lo divide por secciones y puntúa cada chunk combinando **normalización de acentos**, **stopwords**, **raíces (prefijos)** y un **mapa de sinónimos** del dominio. Devuelve los top-k más relevantes y vacío si no hay coincidencias de contenido. |
 | **Base de conocimiento** | `data/manual_operaciones_logistica.txt` con 6 secciones (fallas, siniestros, jornada, mantenimiento, combustible, talleres). |

@@ -120,6 +120,37 @@ def detect_uf_query(query: str) -> bool:
     return any(kw in query.lower() for kw in uf_keywords)
 
 
+def answer_query(client, retriever, memory, query: str) -> dict:
+    """Full RAG + tool pipeline for a single user query.
+
+    Retrieves manual context, optionally queries the external UF tool,
+    generates an answer and updates the conversation memory.
+
+    Returns:
+        dict with keys: answer, sources, used_uf, uf_info.
+    """
+    relevant_docs = retriever(query, top_k=3)
+    context = "\n".join(relevant_docs) if relevant_docs else ""
+
+    used_uf = False
+    uf_info = None
+    if detect_uf_query(query):
+        uf_info = consultar_valor_uf_actual()
+        used_uf = True
+        context = f"{context}\n\nInformacion economica: {uf_info}" if context else uf_info
+
+    response = generate_response(client, query, context, memory.get_history())
+    memory.add_user(query)
+    memory.add_assistant(response)
+
+    return {
+        "answer": response,
+        "sources": relevant_docs,
+        "used_uf": used_uf,
+        "uf_info": uf_info,
+    }
+
+
 def main():
     """Run the interactive CLI loop with conversational memory."""
     print("=" * 60)
@@ -147,18 +178,9 @@ def main():
         if not user_input:
             continue
 
-        relevant_docs = retriever(user_input, top_k=3)
-        context = "\n".join(relevant_docs) if relevant_docs else ""
-
-        if detect_uf_query(user_input):
-            uf_info = consultar_valor_uf_actual()
-            context = f"{context}\n\nInformacion economica: {uf_info}" if context else uf_info
-
         try:
-            response = generate_response(client, user_input, context, memory.get_history())
-            print(f"\n  Asistente: {response}\n")
-            memory.add_user(user_input)
-            memory.add_assistant(response)
+            result = answer_query(client, retriever, memory, user_input)
+            print(f"\n  Asistente: {result['answer']}\n")
         except Exception as exc:
             print(f"\n  Error: {exc}\n")
 
