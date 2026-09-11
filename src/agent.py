@@ -1,13 +1,13 @@
 """Conversational agent for fleet operations support.
 
-Builds a LangChain agent with tool calling, conversational memory,
+Builds a LangGraph agent with tool calling, conversational memory,
 and a strict system prompt to minimize hallucinations.
 """
 
-from langchain.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain.agents import create_agent
 from langchain_mistralai import ChatMistralAI
+from langgraph.checkpoint.memory import MemorySaver
 
 from src.config import LLM_API_KEY, LLM_MODEL
 from src.tools import consultar_manual_operaciones, consultar_valor_uf_actual
@@ -36,7 +36,7 @@ Prioridad de consulta: primero el manual, luego la UF si aplica.\
 
 
 def build_agent():
-    """Create and return the agent executor with tools and memory."""
+    """Create and return the agent with tools and memory."""
     llm = ChatMistralAI(
         model=LLM_MODEL,
         api_key=LLM_API_KEY,
@@ -45,23 +45,15 @@ def build_agent():
 
     tools = [consultar_manual_operaciones, consultar_valor_uf_actual]
 
-    prompt = ChatPromptTemplate.from_messages([
-        SystemMessage(content=SYSTEM_PROMPT),
-        MessagesPlaceholder(variable_name="chat_history"),
-        ("human", "{input}"),
-        MessagesPlaceholder(variable_name="agent_scratchpad"),
-    ])
+    memory = MemorySaver()
 
-    agent = create_tool_calling_agent(llm, tools, prompt)
-
-    executor = AgentExecutor(
-        agent=agent,
+    agent = create_agent(
+        model=llm,
         tools=tools,
-        verbose=True,
-        handle_parsing_errors=True,
-        max_iterations=5,
+        system_prompt=SystemMessage(content=SYSTEM_PROMPT),
+        checkpointer=memory,
     )
-    return executor
+    return agent
 
 
 def main():
@@ -71,8 +63,8 @@ def main():
     print("=" * 60)
     print("Escribe 'salir' o 'exit' para terminar.\n")
 
-    executor = build_agent()
-    chat_history = []
+    agent = build_agent()
+    config = {"configurable": {"thread_id": "session-1"}}
 
     while True:
         try:
@@ -89,12 +81,12 @@ def main():
             continue
 
         try:
-            result = executor.invoke({
-                "input": user_input,
-                "chat_history": chat_history,
-            })
-            print(f"\n🚛 Asistente: {result['output']}\n")
-            chat_history.append(HumanMessage(content=user_input))
+            result = agent.invoke(
+                {"messages": [HumanMessage(content=user_input)]},
+                config=config,
+            )
+            last_message = result["messages"][-1]
+            print(f"\n🚛 Asistente: {last_message.content}\n")
         except Exception as exc:
             print(f"\n⚠️  Error: {exc}\n")
 
