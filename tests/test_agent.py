@@ -1,4 +1,4 @@
-"""Tests for the fleet operations agent tools and RAG pipeline."""
+"""Tests for the insurance assistant tools and RAG pipeline."""
 
 import os
 import tempfile
@@ -16,14 +16,14 @@ class TestRetrieval(unittest.TestCase):
         self.retriever = build_retriever()
 
     def test_accents_and_morphology_are_handled(self):
-        docs = self.retriever("cual es el limite para conducir", top_k=3)
+        docs = self.retriever("cual es el deducible por siniestro", top_k=3)
         joined = "\n".join(docs)
-        self.assertIn("5 horas", joined)
+        self.assertIn("5 UF", joined)
 
-    def test_synonyms_resolve_driving_query(self):
-        docs = self.retriever("cuantas horas puedo manejar", top_k=3)
-        joined = "\n".join(docs)
-        self.assertIn("5 horas", joined)
+    def test_synonyms_resolve_coverage_query(self):
+        docs = self.retriever("cuanto cubre un choque", top_k=3)
+        joined = "\n".join(docs).lower()
+        self.assertIn("terceros", joined)
 
     def test_accentless_query_returns_tow_truck(self):
         docs = self.retriever("numero de grua", top_k=3)
@@ -40,7 +40,7 @@ class TestConsultarManualOperaciones(unittest.TestCase):
     @patch("src.tools._get_retriever")
     def test_returns_results_for_valid_query(self, mock_retriever):
         mock_retriever.return_value = lambda q, top_k=3: [
-            "Llamar al 800-500-100 en caso de falla mecanica."
+            "Llamar al 800-500-100 en caso de siniestro."
         ]
 
         result = consultar_manual_operaciones("numero de grua")

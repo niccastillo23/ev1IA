@@ -16,13 +16,14 @@ from src.tools import consultar_valor_uf_actual
 
 SYSTEM_PROMPT = """\
 /no_think
-Eres el Asistente Inteligente de Operaciones y Flota de Logistica Express S.A.
-Tu rol es apoyar a los conductores con consultas sobre el manual de operaciones.
+Eres el Asistente Inteligente de Seguros Express S.A.
+Tu rol es apoyar a los asegurados con consultas sobre el manual del asegurado:
+coberturas, siniestros, deducibles, reembolsos, primas y red de prestadores.
 
 REGLAS ESTRICTAS:
 1. Usa el contexto proporcionado para responder. Si la informacion no esta en el contexto, indica que no tienes esa informacion. NO inventes.
 2. Responde siempre en espanol de forma clara, concisa y profesional.
-3. Si la pregunta no esta relacionada con operaciones de flota, indica amablemente que solo puedes asistir con temas de la empresa.
+3. Si la pregunta no esta relacionada con seguros, indica amablemente que solo puedes asistir con temas de la compania.
 4. Responde de forma directa, sin mostrar tu razonamiento interno.
 """
 
@@ -154,7 +155,7 @@ def answer_query(client, retriever, memory, query: str) -> dict:
 def main():
     """Run the interactive CLI loop with conversational memory."""
     print("=" * 60)
-    print("  Asistente de Operaciones y Flota - Logistica Express")
+    print("  Asistente Inteligente de Seguros - Seguros Express")
     print("=" * 60)
     print("Escribe 'salir' o 'exit' para terminar.\n")
 
@@ -164,7 +165,7 @@ def main():
 
     while True:
         try:
-            user_input = input("  Chofer: ").strip()
+            user_input = input("  Asegurado: ").strip()
         except (EOFError, KeyboardInterrupt):
             memory.save()
             print("\n  Sesion finalizada.")

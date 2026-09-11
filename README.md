@@ -1,10 +1,10 @@
-# Asistente Inteligente de Operaciones y Flota — Logística Express
+# Asistente Inteligente de Seguros — Seguros Express S.A.
 
-> Proyecto académico evaluado: Asistente conversacional con RAG, integración de herramientas externas y memoria conversacional para soporte a conductores de flota logística.
+> Proyecto académico evaluado: Asistente conversacional con RAG, integración de herramientas externas y memoria conversacional para el soporte a asegurados de una compañía de seguros de vehículos.
 
 ## Descripción
 
-Este proyecto implementa un asistente conversacional que apoya a los conductores de **Logística Express S.A.** con consultas sobre el manual de operaciones: fallas mecánicas, protocolo de siniestros, jornada laboral, mantenimiento preventivo, política de combustible y talleres autorizados. Además, puede consultar en tiempo real el valor de la UF (Unidad de Fomento) desde la API de mindicador.cl.
+Este proyecto implementa un asistente conversacional que apoya a los **asegurados de Seguros Express S.A.** con consultas sobre el manual del asegurado: asistencia en ruta y grúa, protocolo de siniestros, coberturas y exclusiones, reembolsos de gastos, primas y vigencia de la póliza, y red de prestadores autorizados. Además, puede consultar en tiempo real el valor de la UF (Unidad de Fomento) desde la API de mindicador.cl para resolver deducibles y montos en pesos.
 
 ### Tecnologías
 
@@ -17,9 +17,9 @@ Este proyecto implementa un asistente conversacional que apoya a los conductores
 ## Arquitectura
 
 ```
-Chofer → CLI → Agente (Qwen3 vía Groq) ↔ Memoria Conversacional
+Asegurado → Web (Streamlit) / CLI → Agente (Qwen3 vía Groq) ↔ Memoria Conversacional
                       │
-                      ├── Retriever → manual_operaciones_logistica.txt (RAG)
+                      ├── Retriever → manual_operaciones_seguros.txt (RAG)
                       └── consultar_valor_uf_actual → mindicador.cl (API)
 ```
 
@@ -78,10 +78,11 @@ La sesión se guarda en `.memory/session.json` y se recupera al reiniciar.
 ## Recuperación (RAG)
 
 `src/rag_pipeline.py` implementa recuperación léxica sin dependencias externas:
-normaliza acentos (`limite` → `Límites`), elimina stopwords, aplica coincidencia
-por raíz (`conduc` ≈ `conducir`/`conducción`) y amplía con sinónimos del dominio
-(`conducir → manejo`, `grúa → auxilio`). Cuando ninguna palabra de contenido
-coincide, no devuelve contexto y el asistente responde que no tiene la información.
+normaliza acentos (`deducible` → `Deducible`, `poliza` → `póliza`), elimina
+stopwords, aplica coincidencia por raíz (`reemb` ≈ `reembolso`/`reembolsan`) y
+amplía con sinónimos del dominio (`siniestro → accidente`, `cobertura → cubre`,
+`grúa → auxilio`). Cuando ninguna palabra de contenido coincide, no devuelve
+contexto y el asistente responde que no tiene la información.
 
 ## Ejecución
 
@@ -104,9 +105,9 @@ PYTHONPATH=. python src/agent.py
 Estructura de la conversación:
 
 ```
-  Chofer: ¿Cuál es el número para pedir grúa?
+  Asegurado: ¿Cuál es el número para pedir grúa?
   Asistente: El número ... es 800-500-100.
-  Chofer: salir
+  Asegurado: salir
 ```
 
 ## Casos de Prueba
@@ -117,23 +118,23 @@ Estructura de la conversación:
 | 2 | **Memoria multicanal** | "¿Cuánto es el deducible del seguro?" → "¿Y cuánto es eso en pesos?" | 5 UF → conversión a CLP con valor UF vigente |
 | 3 | **Cálculo externo** | "¿Cuánto vale la UF hoy?" | Valor actualizado desde mindicador.cl |
 | 4 | **Anti-alucinación** | "¿Cuál es la política de viáticos?" | "No tengo esa información en el contexto" |
-| 5 | **Seguridad** | "¿Qué hago si se enciende el Check Engine?" | Detener marcha inmediatamente, llamar 800-500-100 |
-| 6 | **Jornada** | "¿Cuántas horas puedo manejar seguido?" | Máximo 5 horas, pausa de 30 min |
-| 7 | **Tolerancia a acentos** | "cual es el limite para conducir" (sin tildes) | 5 horas continuas, jornada máxima 12 h |
+| 5 | **Coberturas** | "¿Cuánto cubre un choque?" | Daños a terceros, daños propios, gastos médicos hasta 200 UF |
+| 6 | **Exclusiones** | "¿Cubren la conducción en estado de ebriedad?" | No, es una exclusión de la póliza |
+| 7 | **Tolerancia a acentos** | "cual es el deducible por siniestro" (sin tildes) | 5 UF por evento |
 
 ### Salida de referencia (casos 1–4)
 
 ```
-  Chofer: ¿Cuál es el número para pedir grúa?
-  Asistente: El número para contactar a la Central de Operaciones ... es el 800-500-100.
+  Asegurado: ¿Cuál es el número para pedir grúa?
+  Asistente: El número para contactar la Central de Asistencia ... es el 800-500-100.
 
-  Chofer: ¿Cuánto es el deducible del seguro?
+  Asegurado: ¿Cuánto es el deducible del seguro?
   Asistente: El deducible del seguro es de 5 UF por evento.
 
-  Chofer: ¿Y cuánto es eso en pesos?
+  Asegurado: ¿Y cuánto es eso en pesos?
   Asistente: ... el monto en pesos es de $204,509.70 CLP.
 
-  Chofer: ¿Cuál es la política de viáticos?
+  Asegurado: ¿Cuál es la política de viáticos?
   Asistente: No tengo esa información en el contexto proporcionado.
 ```
 
@@ -147,7 +148,7 @@ PYTHONPATH=. python -m unittest discover -s tests -v
 
 ```
 ├── data/
-│   └── manual_operaciones_logistica.txt   # Manual de operaciones
+│   └── manual_operaciones_seguros.txt    # Manual del asegurado
 ├── docs/
 │   └── arquitectura.md                    # Documentación técnica
 ├── app.py                                 # Interfaz web (Streamlit)
@@ -170,4 +171,4 @@ PYTHONPATH=. python -m unittest discover -s tests -v
 
 ## Licencia
 
-Proyecto académico — Logística Express S.A.
+Proyecto académico — Seguros Express S.A.

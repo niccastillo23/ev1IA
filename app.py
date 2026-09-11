@@ -13,8 +13,8 @@ from src.memory import ConversationBufferWindowMemory
 from src.rag_pipeline import build_retriever
 
 st.set_page_config(
-    page_title="Asistente de Flota — Logística Express",
-    page_icon="🚚",
+    page_title="Asistente de Seguros — Seguros Express",
+    page_icon="🛡️",
     layout="centered",
     initial_sidebar_state="expanded",
 )
@@ -88,9 +88,9 @@ if "pending_prompt" not in st.session_state:
 
 SUGGESTIONS = [
     "¿Cuál es el número para pedir grúa?",
-    "¿Cuánto es el deducible del seguro?",
-    "¿Cuántas horas puedo manejar seguido?",
-    "¿Qué hago si se enciende el Check Engine?",
+    "¿Cuánto es el deducible por siniestro?",
+    "¿Qué documentos necesito para un reembolso?",
+    "¿Está cubierta la conducción en estado de ebriedad?",
 ]
 
 
@@ -114,7 +114,7 @@ def handle_prompt(prompt: str) -> None:
     with st.chat_message("user", avatar="🧑"):
         st.markdown(prompt)
 
-    with st.chat_message("assistant", avatar="🚚"):
+    with st.chat_message("assistant", avatar="🛡️"):
         with st.spinner("Consultando manual y fuentes…"):
             try:
                 result = answer_query(
@@ -145,10 +145,10 @@ def handle_prompt(prompt: str) -> None:
 st.markdown(
     """
     <div class="le-header">
-        <div class="le-logo">🚚</div>
+        <div class="le-logo">🛡️</div>
         <div>
-            <h1>Logística Express</h1>
-            <p>Asistente Inteligente de Operaciones y Flota</p>
+            <h1>Seguros Express</h1>
+            <p>Asistente Inteligente del Asegurado</p>
         </div>
     </div>
     """,
@@ -161,12 +161,12 @@ st.markdown(
 
 # --------------------------------------------------------------- Sidebar
 with st.sidebar:
-    st.markdown("### 🚚 Logística Express")
-    st.caption("Asistente de Operaciones y Flota")
+    st.markdown("### 🛡️ Seguros Express")
+    st.caption("Asistente Inteligente del Asegurado")
     st.divider()
     st.markdown("**Modelo**\n\n`qwen/qwen3.6-27b` · vía Groq")
     st.markdown("**Memoria**\n\nVentana deslizante · 5 turnos")
-    st.markdown("**Fuentes**\n\nManual de operaciones · API UF")
+    st.markdown("**Fuentes**\n\nManual del asegurado · API UF")
     st.divider()
     if st.button("🧹 Limpiar conversación", use_container_width=True):
         st.session_state.messages = []
@@ -194,7 +194,7 @@ for message in st.session_state.messages:
             render_sources(message)
 
 # -------------------------------------------------------------- New input
-prompt = st.chat_input("Escribe tu consulta sobre operaciones y flota…")
+prompt = st.chat_input("Escribe tu consulta sobre seguros, coberturas o siniestros…")
 if st.session_state.pending_prompt:
     prompt = st.session_state.pending_prompt
     st.session_state.pending_prompt = None

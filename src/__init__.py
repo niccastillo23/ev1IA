@@ -1,1 +1,1 @@
-"""Asistente Inteligente de Operaciones y Flota - Logística Express."""
+"""Asistente Inteligente de Seguros - Seguros Express S.A."""

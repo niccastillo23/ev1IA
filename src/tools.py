@@ -31,7 +31,7 @@ def consultar_manual_operaciones(consulta: str) -> str:
 def consultar_valor_uf_actual(reintentos: int = 3) -> str:
     """Fetch the current UF value from mindicador.cl API with retries."""
     url = "https://mindicador.cl/api/uf"
-    headers = {"User-Agent": "Mozilla/5.0 (compatible; LogisticaExpressBot/1.0)"}
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; SegurosExpressBot/1.0)"}
     ultimo_error = "sin respuesta"
 
     for intento in range(reintentos):
@@ -69,6 +69,6 @@ TOOLS = {
 
 TOOL_DESCRIPTIONS = """
 Herramientas disponibles:
-- consultar_manual_operaciones(consulta: str): Busca informacion en el manual de operaciones de Logistica Express. Usa para preguntas sobre procedimientos, fallas mecanicas, siniestros, jornada laboral, mantenimiento, combustible o talleres.
+- consultar_manual_operaciones(consulta: str): Busca informacion en el manual del asegurado de Seguros Express. Usa para preguntas sobre coberturas, siniestros, deducibles, reembolsos, primas, polizas, grua o red de prestadores.
 - consultar_valor_uf_actual(): Obtiene el valor actual de la UF (Unidad de Fomento) desde la API mindicador.cl. Usa para consultas economicas que involucren UF.
 """
