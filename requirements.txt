@@ -1,0 +1,6 @@
+langchain>=0.2.0
+langchain-community
+langchain-mistralai
+chromadb
+requests
+python-dotenv
