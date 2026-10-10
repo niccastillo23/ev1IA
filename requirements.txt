@@ -1,4 +1,17 @@
-openai
+# --- Núcleo LLM / LangChain v1 ---
+langchain>=1.0
+langchain-core>=1.0
+langchain-community>=0.4
+langgraph>=1.0
+
+# --- Proveedor (chat + embeddings) ---
+langchain-mistralai>=1.0
+
+# --- RAG vectorial ---
+langchain-chroma>=0.2
+chromadb>=1.0
+
+# --- Herramientas y app ---
 requests
 python-dotenv
 streamlit

@@ -1,6 +1,7 @@
-"""Tools for the fleet operations assistant.
+"""Core tools/functions for the Seguros Express assistant.
 
-Provides manual search and real-time UF value lookup.
+Pure functions used by the LangChain tools in `src/agent_tools.py`:
+manual search (hybrid retrieval) and real-time UF lookup.
 """
 
 import requests
@@ -17,11 +18,11 @@ def _get_retriever():
 
 
 def consultar_manual_operaciones(consulta: str) -> str:
-    """Search the fleet operations manual for relevant information."""
+    """Search the insured's manual for relevant information."""
     retriever = _get_retriever()
     docs = retriever(consulta, top_k=3)
     if not docs:
-        return "No se encontraron resultados relevantes en el manual de operaciones."
+        return "No se encontraron resultados relevantes en el manual del asegurado."
     results = []
     for i, doc in enumerate(docs, 1):
         results.append(f"[Fragmento {i}]\n{doc}")
@@ -60,15 +61,3 @@ def consultar_valor_uf_actual(reintentos: int = 3) -> str:
             ultimo_error = f"formato inesperado: {exc}"
 
     return f"Error al consultar el valor de la UF tras {reintentos} intentos ({ultimo_error})."
-
-
-TOOLS = {
-    "consultar_manual_operaciones": consultar_manual_operaciones,
-    "consultar_valor_uf_actual": consultar_valor_uf_actual,
-}
-
-TOOL_DESCRIPTIONS = """
-Herramientas disponibles:
-- consultar_manual_operaciones(consulta: str): Busca informacion en el manual del asegurado de Seguros Express. Usa para preguntas sobre coberturas, siniestros, deducibles, reembolsos, primas, polizas, grua o red de prestadores.
-- consultar_valor_uf_actual(): Obtiene el valor actual de la UF (Unidad de Fomento) desde la API mindicador.cl. Usa para consultas economicas que involucren UF.
-"""

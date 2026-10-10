@@ -1,15 +1,23 @@
-"""RAG pipeline for the fleet operations assistant.
+"""RAG pipeline for the Seguros Express assistant.
 
-Implements lexical hybrid retrieval over the operations manual:
-text normalization (accents), Spanish stopwords, light stemming
-(prefix matching) and a domain synonym map. Uses only the standard
-library, so no embedding provider is required.
+Two retrieval strategies are combined into a hybrid retriever:
+
+1. **Lexical** (standard library only): text normalization (accents),
+   Spanish stopwords, light stemming (prefix matching) and a domain synonym
+   map. Excellent for exact tokens such as phone numbers or ``5 UF``.
+2. **Vector**: Mistral embeddings stored in Chroma (see ``src/vectorstore``),
+   which captures paraphrases and semantic similarity.
+
+The fusion prefers lexical matches (exact codes) and then fills the
+remaining slots with semantically relevant chunks. If neither strategy finds
+content, the retriever returns an empty list, preserving the
+anti-hallucination behaviour.
 """
 
 import re
 import unicodedata
 
-from src.config import MANUAL_PATH
+from src.config import MANUAL_PATH, RETRIEVAL_TOP_K, VECTOR_SCORE_THRESHOLD
 
 STOPWORDS = {
     "de", "la", "el", "los", "las", "un", "una", "unos", "unas",
@@ -127,11 +135,58 @@ def keyword_retrieval(query: str, documents: list, top_k: int = 3) -> list:
     return [doc for _, doc in scored[:top_k]]
 
 
-def build_retriever():
-    """Load the manual and return a retriever function."""
+def _fuse(lexical: list, vector_texts: list, top_k: int) -> list:
+    """Merge lexical and vector results, deduplicating by normalized prefix.
+
+    Lexical fragments come first so exact tokens (phone numbers, UF values)
+    keep priority; vector chunks then fill the remaining slots.
+    """
+    merged = []
+    seen = set()
+    for text in list(lexical) + list(vector_texts):
+        key = normalize(text)[:60]
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(text)
+        if len(merged) >= top_k:
+            break
+    return merged
+
+
+def build_retriever(use_embeddings: bool = True):
+    """Load the manual and return a hybrid retriever function.
+
+    Args:
+        use_embeddings: when False, only the lexical retriever is used. This
+            keeps tests hermetic (no API key / network required).
+    """
     documents = load_and_split_manual()
 
-    def retriever(query: str, top_k: int = 3) -> list:
-        return keyword_retrieval(query, documents, top_k)
+    vector_search = None
+    if use_embeddings:
+        try:
+            from src.vectorstore import build_vector_search
+
+            vector_search = build_vector_search()
+        except Exception as exc:  # noqa: BLE001 - fall back to lexical only
+            print(f"  [RAG] Embeddings no disponibles, usando solo búsqueda léxica: {exc}")
+            vector_search = None
+
+    def retriever(query: str, top_k: int = RETRIEVAL_TOP_K) -> list:
+        lexical = keyword_retrieval(query, documents, top_k=top_k)
+        if vector_search is None:
+            return lexical
+
+        try:
+            vector_hits = vector_search(
+                query, k=top_k, threshold=VECTOR_SCORE_THRESHOLD
+            )
+        except Exception as exc:  # noqa: BLE001 - degrade gracefully
+            print(f"  [RAG] Error en búsqueda vectorial: {exc}")
+            return lexical
+
+        vector_texts = [doc.page_content for doc, _ in vector_hits]
+        return _fuse(lexical, vector_texts, top_k)
 
     return retriever

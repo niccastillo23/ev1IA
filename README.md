@@ -1,88 +1,96 @@
 # Asistente Inteligente de Seguros — Seguros Express S.A.
 
-> Proyecto académico evaluado: Asistente conversacional con RAG, integración de herramientas externas y memoria conversacional para el soporte a asegurados de una compañía de seguros de vehículos.
+> Proyecto académico (ISY0101 · Ingeniería de Soluciones con IA). Asistente
+> conversacional con **RAG sobre embeddings**, **agente(s) con herramientas** y
+> **memoria de corto y largo plazo** para el soporte a asegurados de una
+> compañía de seguros de vehículos.
 
 ## Descripción
 
-Este proyecto implementa un asistente conversacional que apoya a los **asegurados de Seguros Express S.A.** con consultas sobre el manual del asegurado: asistencia en ruta y grúa, protocolo de siniestros, coberturas y exclusiones, reembolsos de gastos, primas y vigencia de la póliza, y red de prestadores autorizados. Además, puede consultar en tiempo real el valor de la UF (Unidad de Fomento) desde la API de mindicador.cl para resolver deducibles y montos en pesos.
+El asistente atiende a los **asegurados de Seguros Express S.A.** con consultas
+sobre el manual del asegurado: asistencia en ruta y grúa, protocolo de
+siniestros, coberturas y exclusiones, reembolsos, primas y vigencia, y red de
+prestadores. Además consulta en tiempo real el valor de la **UF** desde
+mindicador.cl para resolver deducibles y montos en pesos.
 
-### Tecnologías
+El sistema evoluciona el RAG de la Evaluación Parcial 1 (recuperación léxica) a
+una arquitectura de agentes de la Evaluación Parcial 2:
 
-- **Groq** — Inferencia del LLM (Qwen3) vía API compatible con OpenAI
-- **OpenAI SDK** — Cliente utilizado contra el endpoint de Groq
-- **RAG** — Recuperación léxica desde el manual (normalización de acentos, stopwords, raíces y sinónimos)
-- **Herramientas externas** — Consulta de la UF a mindicador.cl
-- **Memoria conversacional** — Buffer de ventana deslizante (`ConversationBufferWindowMemory`)
+- **Recuperación híbrida**: embeddings (Mistral + Chroma) **+** búsqueda léxica.
+- **Agente ReAct** con *tool calling* (LangChain v1 + LangGraph).
+- **Multi-agente**: un **supervisor** que enruta a especialistas.
+- **Memoria**: corto plazo (checkpointer) y largo plazo (semántica en Chroma).
+
+## Tecnologías
+
+| Componente | Tecnología |
+|---|---|
+| Chat (LLM) | Mistral `mistral-small-latest` (API compatible con OpenAI) |
+| Embeddings | Mistral `mistral-embed` (1024 dims) |
+| Base vectorial | Chroma (persistente) |
+| RAG | Chunking de LangChain + retriever híbrido (vector + léxico) |
+| Agentes | LangChain v1 (`create_agent`) + LangGraph (`MemorySaver`) |
+| Orquestación | Patrón supervisor + especialistas (LangGraph) |
+| Memoria largo plazo | Chroma + embeddings (recuperación semántica) |
+| Interfaz | Streamlit (web) + CLI |
+| Herramienta externa | API mindicador.cl (valor UF) |
 
 ## Arquitectura
 
 ```
-Asegurado → Web (Streamlit) / CLI → Agente (Qwen3 vía Groq) ↔ Memoria Conversacional
-                      │
-                      ├── Retriever → manual_operaciones_seguros.txt (RAG)
-                      └── consultar_valor_uf_actual → mindicador.cl (API)
+Asegurado → Web (Streamlit) / CLI → Assistant (fachada)
+                                     │
+                    ┌────────────────┴──────────────────┐
+                    │                                   │
+             Multi-agente (default)               Agente único
+             Supervisor (router)                   ReAct + tools
+                    │
+   ┌────────────┬───┴────────┬──────────────┐
+ Coberturas  Siniestros   Reembolsos     Financiero        General
+   │            │             │             │                │
+   └────────────┴─────────────┴─────────────┴────────────────┘
+                    │
+        ┌───────────┴────────────┐
+   RAG híbrido                Tool UF
+ (embeddings + léxico)     (mindicador.cl)
+        │
+  manual_operaciones_seguros.txt
 ```
 
-Ver [docs/arquitectura.md](docs/arquitectura.md) para el diagrama completo en Mermaid.
-
-## Requisitos Previos
-
-- Python 3.10+
-- API key de Groq ([console.groq.com](https://console.groq.com/))
+Ver [docs/arquitectura.md](docs/arquitectura.md) para el diagrama Mermaid
+detallado, el flujo de orquestación y las decisiones de diseño.
 
 ## Instalación
 
-```bash
-# 1. Clonar el repositorio
-git clone <repo-url>
-cd ev1IA
+Requisitos: **Python 3.10+** y una **API key de Mistral**
+([console.mistral.ai/api-keys](https://console.mistral.ai/api-keys), gratuita).
 
-# 2. Crear entorno virtual
+```bash
 python -m venv .venv
 source .venv/bin/activate
-
-# 3. Instalar dependencias
 pip install -r requirements.txt
-
-# 4. Configurar variables de entorno
-cp .env.example .env
-# Editar .env y agregar tu LLM_API_KEY de Groq
+cp .env.example .env      # y completa LLM_API_KEY
 ```
 
 ### Archivo `.env`
 
 ```env
-LLM_API_KEY=tu-api-key-de-groq
-LLM_BASE_URL=https://api.groq.com/openai/v1
-LLM_MODEL=qwen/qwen3.6-27b
-LLM_MODEL_SMALL=qwen/qwen3.8-27b
+LLM_BASE_URL="https://api.mistral.ai/v1"
+LLM_API_KEY="tu-api-key-de-mistral"
+LLM_MODEL="mistral-small-latest"
+LLM_MODEL_SMALL="ministral-8b-latest"
 
-# Memoria conversacional (ventana deslizante)
-MEMORY_MAX_TURNS=5
-MEMORY_PERSIST_PATH=.memory/session.json
+EMBEDDING_MODEL="mistral-embed"
+VECTOR_DB_PATH="data/chroma"
+CHUNK_SIZE="700"
+CHUNK_OVERLAP="120"
+RETRIEVAL_TOP_K="4"
+VECTOR_SCORE_THRESHOLD="0.68"
+
+MEMORY_MAX_TURNS="5"
+MEMORY_PERSIST_PATH=".memory/session.json"
+LONGTERM_DB_PATH="data/chroma_memory"
 ```
-
-## Memoria Conversacional
-
-El asistente utiliza una **memoria de buffer de ventana deslizante**
-(`ConversationBufferWindowMemory`, en `src/memory.py`). Conserva los últimos
-`MEMORY_MAX_TURNS` intercambios (5 por defecto) y descarta los más antiguos,
-lo que permite conversaciones multi-turno sin que el contexto crezca sin límite.
-La sesión se guarda en `.memory/session.json` y se recupera al reiniciar.
-
-| Variable | Descripción | Default |
-|---|---|---|
-| `MEMORY_MAX_TURNS` | Turnos conservados (usuario + asistente) | `5` |
-| `MEMORY_PERSIST_PATH` | Archivo de persistencia de la sesión | `.memory/session.json` |
-
-## Recuperación (RAG)
-
-`src/rag_pipeline.py` implementa recuperación léxica sin dependencias externas:
-normaliza acentos (`deducible` → `Deducible`, `poliza` → `póliza`), elimina
-stopwords, aplica coincidencia por raíz (`reemb` ≈ `reembolso`/`reembolsan`) y
-amplía con sinónimos del dominio (`siniestro → accidente`, `cobertura → cubre`,
-`grúa → auxilio`). Cuando ninguna palabra de contenido coincide, no devuelve
-contexto y el asistente responde que no tiene la información.
 
 ## Ejecución
 
@@ -92,9 +100,10 @@ contexto y el asistente responde que no tiene la información.
 streamlit run app.py
 ```
 
-Abre `http://localhost:8501` en el navegador. Incluye burbujas de chat,
-preguntas rápidas, panel de **Fuentes consultadas** (fragmentos del manual y
-llamada a la UF) y botón para limpiar la conversación.
+Abre `http://localhost:8501`. Incluye burbujas de chat, preguntas rápidas,
+selector de **orquestación** (multi-agente / agente único) y un panel de
+**Trazabilidad** que muestra el especialista elegido, las herramientas usadas y
+las fuentes consultadas.
 
 ### Opción 2 — Línea de comandos (CLI)
 
@@ -102,41 +111,87 @@ llamada a la UF) y botón para limpiar la conversación.
 PYTHONPATH=. python src/agent.py
 ```
 
-Estructura de la conversación:
-
 ```
   Asegurado: ¿Cuál es el número para pedir grúa?
-  Asistente: El número ... es 800-500-100.
-  Asegurado: salir
+  Asistente [siniestros] (herramientas: buscar_manual):
+  El número de la Central de Asistencia es 800-500-100.
 ```
+
+## RAG con embeddings
+
+`src/vectorstore.py` construye (una sola vez y de forma persistente) un índice
+Chroma sobre el manual usando `mistral-embed`:
+
+1. El manual se divide en secciones y luego en *chunks* con solape
+   (`RecursiveCharacterTextSplitter`).
+2. Cada *chunk* se embebe y se guarda en `data/chroma/`. El índice se
+   reconstruye solo si el manual cambia (verificación por *fingerprint*).
+3. La búsqueda devuelve fragmentos con su **score de relevancia**; los que no
+   alcanzan `VECTOR_SCORE_THRESHOLD` se descartan (anti-alucinación).
+
+`src/rag_pipeline.py` combina el vector con la **búsqueda léxica** original
+(normalización de acentos, stopwords, raíces y sinónimos) mediante *fusión*: los
+aciertos léxicos tienen prioridad (códigos exactos como `800-500-100` o `5 UF`)
+y el vector rellena los cupos restantes. Si ninguna estrategia encuentra
+contenido, el retriever devuelve vacío y el agente responde que no tiene la
+información.
+
+## Agentes y orquestación
+
+### Herramientas (`src/agent_tools.py`)
+
+| Herramienta | Uso |
+|---|---|
+| `buscar_manual(consulta)` | RAG híbrido sobre el manual del asegurado |
+| `consultar_valor_uf_actual()` | Valor vigente de la UF (mindicador.cl) |
+| `convertir_uf_a_clp(cantidad_uf)` | Convierte UF → CLP con el valor vigente |
+| `consultar_red_talleres(ciudad)` | Talleres autorizados por ciudad |
+
+### Agente único (`src/agent_graph.py`)
+
+Agente ReAct construido con `langchain.agents.create_agent`, con el conjunto
+completo de herramientas y memoria de corto plazo vía `MemorySaver`.
+
+### Multi-agente — supervisor (`src/orchestrator.py`)
+
+Patrón **supervisor + especialistas** en LangGraph:
+
+```
+START → supervisor → {coberturas | siniestros | reembolsos | financiero | general} → END
+```
+
+- El **supervisor** clasifica la consulta con un *router híbrido*: primero
+  reglas deterministas por palabras clave (fiable y explicable) y, ante
+  ambigüedad, un LLM con salida estructurada (`RouteDecision`).
+- Cada **especialista** es un agente ReAct con un *system prompt* y un
+  subconjunto de herramientas adaptados a su dominio.
+- Todos comparten el mismo estado conversacional, por lo que el enrutamiento
+  considera el hilo previo (los seguimientos cortos como *"¿y eso en pesos?"*
+  conservan el contexto).
+
+## Memoria
+
+| Tipo | Implementación | Archivo |
+|---|---|---|
+| **Corto plazo** | Checkpointer de LangGraph (`MemorySaver`) por `thread_id` | `src/agent_graph.py`, `src/orchestrator.py` |
+| **Corto plazo (buffers)** | `ConversationBufferWindowMemory` (ventana deslizante persistida) | `src/memory.py` |
+| **Largo plazo** | `LongTermMemory`: resúmenes embebidos en Chroma, recuperados por similitud | `src/memory.py` |
+
+Al responder, el asistente recupera de la memoria de largo plazo los
+intercambios semánticamente relevantes y los inyecta como contexto; tras la
+respuesta, guarda el nuevo intercambio.
 
 ## Casos de Prueba
 
 | # | Tipo | Pregunta de Ejemplo | Resultado Esperado |
 |---|------|---------------------|-------------------|
-| 1 | **Consulta interna** | "¿Cuál es el número para pedir grúa?" | 800-500-100 |
-| 2 | **Memoria multicanal** | "¿Cuánto es el deducible del seguro?" → "¿Y cuánto es eso en pesos?" | 5 UF → conversión a CLP con valor UF vigente |
-| 3 | **Cálculo externo** | "¿Cuánto vale la UF hoy?" | Valor actualizado desde mindicador.cl |
-| 4 | **Anti-alucinación** | "¿Cuál es la política de viáticos?" | "No tengo esa información en el contexto" |
-| 5 | **Coberturas** | "¿Cuánto cubre un choque?" | Daños a terceros, daños propios, gastos médicos hasta 200 UF |
-| 6 | **Exclusiones** | "¿Cubren la conducción en estado de ebriedad?" | No, es una exclusión de la póliza |
-| 7 | **Tolerancia a acentos** | "cual es el deducible por siniestro" (sin tildes) | 5 UF por evento |
-
-### Salida de referencia (casos 1–4)
-
-```
-  Asegurado: ¿Cuál es el número para pedir grúa?
-  Asistente: El número para contactar la Central de Asistencia ... es el 800-500-100.
-
-  Asegurado: ¿Cuánto es el deducible del seguro?
-  Asistente: El deducible del seguro es de 5 UF por evento.
-
-  Asegurado: ¿Y cuánto es eso en pesos?
-  Asistente: ... el monto en pesos es de $204,509.70 CLP.
-
-  Asegurado: ¿Cuál es la política de viáticos?
-  Asistente: No tengo esa información en el contexto proporcionado.
-```
+| 1 | Consulta interna | "¿Cuál es el número para pedir grúa?" | 800-500-100 |
+| 2 | Memoria multi-turno | "¿Cuánto es el deducible?" → "¿Y eso en pesos?" | 5 UF → CLP con UF vigente |
+| 3 | Cálculo externo | "¿Cuánto vale la UF hoy?" | Valor actualizado (mindicador.cl) |
+| 4 | Anti-alucinación | "¿Cuál es la política de viáticos?" | "No tengo esa información" |
+| 5 | Coberturas | "¿Cuánto cubre un choque?" | Daños a terceros/propios, gastos médicos hasta 200 UF |
+| 6 | Exclusiones | "¿Cubren la conducción en estado de ebriedad?" | No, es exclusión |
+| 7 | Tolerancia a acentos | "cual es el deducible por siniestro" | 5 UF por evento |
 
 ## Ejecutar Tests
 
@@ -144,26 +199,31 @@ Estructura de la conversación:
 PYTHONPATH=. python -m unittest discover -s tests -v
 ```
 
+Los tests de recuperación usan `build_retriever(use_embeddings=False)` para ser
+herméticos (sin red ni API key).
+
 ## Estructura del Proyecto
 
 ```
 ├── data/
-│   └── manual_operaciones_seguros.txt    # Manual del asegurado
+│   └── manual_operaciones_seguros.txt   # Manual del asegurado
+│   └── chroma/                          # Índice vectorial (generado)
+│   └── chroma_memory/                   # Memoria de largo plazo (generada)
 ├── docs/
-│   └── arquitectura.md                    # Documentación técnica
-├── app.py                                 # Interfaz web (Streamlit)
-├── .streamlit/
-│   └── config.toml                        # Tema visual de la app web
+│   └── arquitectura.md                  # Documentación técnica (Mermaid)
+├── app.py                               # Interfaz web (Streamlit)
 ├── src/
-│   ├── __init__.py
-│   ├── config.py                          # Configuración y variables de entorno
-│   ├── memory.py                          # Memoria (buffer de ventana deslizante)
-│   ├── rag_pipeline.py                    # Recuperación de contexto (RAG)
-│   ├── tools.py                           # Herramientas (manual + UF)
-│   └── agent.py                           # Pipeline del agente + CLI
+│   ├── config.py                        # Configuración y variables de entorno
+│   ├── vectorstore.py                   # Embeddings Mistral + Chroma
+│   ├── rag_pipeline.py                  # Recuperación híbrida (vector + léxico)
+│   ├── tools.py                         # Funciones base (manual + UF)
+│   ├── agent_tools.py                   # Herramientas LangChain del agente
+│   ├── memory.py                        # Memoria corto y largo plazo
+│   ├── agent_graph.py                   # Agente ReAct (LangChain + LangGraph)
+│   ├── orchestrator.py                  # Supervisor multi-agente
+│   └── agent.py                         # Fachada Assistant + CLI
 ├── tests/
-│   └── test_agent.py                      # Tests unitarios
-├── .gitignore
+│   └── test_agent.py                    # Tests unitarios
 ├── .env.example
 ├── requirements.txt
 └── README.md

@@ -1,19 +1,23 @@
-"""Tests for the insurance assistant tools and RAG pipeline."""
+"""Tests for the insurance assistant retrieval, tools and agents."""
 
 import os
 import tempfile
 import unittest
 from unittest.mock import patch, MagicMock
 
+from src.agent_graph import extract_metadata, sanitize_answer
+from src.agent_tools import _uf_number
 from src.memory import ConversationBufferWindowMemory
-from src.rag_pipeline import build_retriever
+from src.orchestrator import _is_greeting, _keyword_route, _raw_query
+from src.rag_pipeline import _fuse, build_retriever
 from src.tools import consultar_manual_operaciones, consultar_valor_uf_actual
 
 
 class TestRetrieval(unittest.TestCase):
 
     def setUp(self):
-        self.retriever = build_retriever()
+        # Lexical-only retriever keeps tests hermetic (no embeddings/network).
+        self.retriever = build_retriever(use_embeddings=False)
 
     def test_accents_and_morphology_are_handled(self):
         docs = self.retriever("cual es el deducible por siniestro", top_k=3)
@@ -120,6 +124,104 @@ class TestConversationBufferWindowMemory(unittest.TestCase):
             restored = ConversationBufferWindowMemory(max_turns=3, persist_path=path)
             restored.load()
             self.assertEqual(restored.get_history(), memory.get_history())
+
+
+class TestFusion(unittest.TestCase):
+
+    def test_prefers_lexical_and_deduplicates(self):
+        lexical = ["SECCIÓN 2: SINIESTROS\nDeducible 5 UF."]
+        vector = ["SECCIÓN 2: SINIESTROS\nDeducible 5 UF.", "3.1 Coberturas\nDaños a terceros."]
+        fused = _fuse(lexical, vector, top_k=3)
+        self.assertEqual(len(fused), 2)
+        self.assertEqual(fused[0], lexical[0])
+
+    def test_fills_slots_with_vector(self):
+        fused = _fuse([], ["a", "b"], top_k=2)
+        self.assertEqual(fused, ["a", "b"])
+
+
+class TestRouting(unittest.TestCase):
+
+    def test_keyword_routing(self):
+        self.assertEqual(_keyword_route("cuanto cubre un choque"), "coberturas")
+        self.assertEqual(_keyword_route("numero de grua"), "siniestros")
+        self.assertEqual(_keyword_route("documentos para reembolso"), "reembolsos")
+        self.assertEqual(_keyword_route("deducible en pesos"), "financiero")
+
+    def test_keyword_routing_returns_none_for_unknown(self):
+        self.assertIsNone(_keyword_route("receta de chocolate"))
+
+    def test_greeting_detection(self):
+        self.assertTrue(_is_greeting("Hola, buenos días"))
+        self.assertTrue(_is_greeting("hola"))
+        self.assertFalse(_is_greeting("cuento cubre el choque"))
+
+    def test_raw_query_strips_injected_memory(self):
+        injected = (
+            "[Contexto de conversaciones previas del asegurado]\n"
+            "- 5 UF = $205.000 CLP en pesos\n\n"
+            "[Consulta actual]\n¿Cubren la conducción en estado de ebriedad?"
+        )
+        self.assertEqual(
+            _raw_query(injected), "¿Cubren la conducción en estado de ebriedad?"
+        )
+        self.assertEqual(_raw_query("consulta simple"), "consulta simple")
+
+
+class TestUfParser(unittest.TestCase):
+
+    def test_parses_chilean_format(self):
+        raw = "Valor UF al 2025-01-15: $38,500.50 CLP"
+        self.assertEqual(_uf_number(raw), 38500.50)
+
+    def test_returns_none_without_number(self):
+        self.assertIsNone(_uf_number("Error al consultar el valor de la UF"))
+
+
+class TestExtractMetadata(unittest.TestCase):
+
+    def test_collects_tools_and_sources(self):
+        class Msg:
+            def __init__(self, type, name="", content="", tool_calls=None):
+                self.type = type
+                self.name = name
+                self.content = content
+                self.tool_calls = tool_calls
+
+        messages = [
+            Msg("ai", tool_calls=[{"name": "buscar_manual"}]),
+            Msg("tool", name="buscar_manual", content="Telefono 800-500-100"),
+            Msg("ai", content="Listo."),
+        ]
+        meta = extract_metadata(messages)
+        self.assertIn("buscar_manual", meta["tools_used"])
+        self.assertEqual(len(meta["sources"]), 1)
+        self.assertFalse(meta["used_uf"])
+
+    def test_detects_uf_tool(self):
+        class Msg:
+            type = "tool"
+            name = "convertir_uf_a_clp"
+            content = "5 UF = $205,000 CLP"
+            tool_calls = None
+
+        meta = extract_metadata([Msg()])
+        self.assertTrue(meta["used_uf"])
+        self.assertIn("205", meta["uf_info"])
+
+
+class TestSanitizeAnswer(unittest.TestCase):
+
+    def test_fixes_corrupted_uf_term(self):
+        for bad in ["5 UF (Unidades de Folicación)", "5 UF (Unidades de Fenglobales)"]:
+            fixed = sanitize_answer(bad)
+            self.assertIn("Unidades de Fomento", fixed)
+            self.assertNotIn("Folicación", fixed)
+            self.assertNotIn("Fenglobales", fixed)
+
+    def test_keeps_correct_term(self):
+        text = "El deducible es 5 UF (Unidades de Fomento)."
+        self.assertEqual(sanitize_answer(text), text)
 
 
 if __name__ == "__main__":

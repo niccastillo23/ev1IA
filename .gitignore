@@ -13,6 +13,10 @@ __pycache__/
 .memory/
 *.memory
 
+# Vector stores (regenerated from the manual with embeddings)
+data/chroma/
+data/chroma_memory/
+
 # Virtual environments
 .venv/
 venv/

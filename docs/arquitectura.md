@@ -1,83 +1,146 @@
 # Arquitectura del Asistente Inteligente de Seguros — Seguros Express
 
-## Diagrama de Arquitectura
+Este documento describe la arquitectura de agentes (RA2) que evoluciona el
+pipeline RAG de la Evaluación Parcial 1. Se prioriza la **orquestación
+multi-agente**, la **memoria** y la **recuperación híbrida con embeddings**.
+
+## 1. Vista general
 
 ```mermaid
 flowchart TD
-    A[Asegurado] -->|Escribe consulta en español| B[Interfaz<br/>Web Streamlit / CLI]
-    B -->|Input + historial| C[Agente Orquestador<br/>Groq - Qwen3]
+    A[Asegurado] -->|Consulta en español| B[Interfaz<br/>Streamlit / CLI]
+    B -->|query + thread_id| C[Assistant<br/>fachada src/agent.py]
 
-    C -->|Paso 1: Recuperación| D[Retriever Léxico<br/>normalización + stopwords<br/>+ raíces + sinónimos]
-    C -->|Paso 3: Tool externa| E[consultar_valor_uf_actual]
+    C -->|mode = multi| D[Orquestador supervisor<br/>LangGraph]
+    C -->|mode = single| E[Agente ReAct único<br/>create_agent]
 
-    D -->|Chunks relevantes| F[(manual_operaciones<br/>_seguros.txt)]
-    F -->|Contexto| D
-    D -->|Contexto recuperado| C
+    D --> F{Router híbrido<br/>keywords + LLM}
+    F -->|coberturas| G[Especialista<br/>Coberturas/Exclusiones]
+    F -->|siniestros| H[Especialista<br/>Siniestros/Asistencia]
+    F -->|reembolsos| I[Especialista<br/>Reembolsos/Primas]
+    F -->|financiero| J[Especialista<br/>Financiero UF]
+    F -->|general| K[Especialista<br/>General]
 
-    E -->|HTTP GET| G[API mindicador.cl]
-    G -->|JSON: valor UF| E
-    E -->|Valor formateado CLP| C
+    G & H & I & J & K --> L[Tools LangChain]
+    E --> L
 
-    C -->|Respuesta final| B
-    B -->|Texto| A
+    L --> M[buscar_manual]
+    L --> N[consultar_valor_uf_actual]
+    L --> O[convertir_uf_a_clp]
+    L --> P[consultar_red_talleres]
 
-    C <-->|Memoria conversacional| H[(conversation_history)]
+    M --> Q[Retriever híbrido]
+    Q --> R[(Chroma<br/>embeddings Mistral)]
+    Q --> S[Capa léxica<br/>acentos/sinónimos]
+    R --> T[manual_operaciones_seguros.txt]
+    S --> T
+
+    N --> U[API mindicador.cl]
+    O --> U
+
+    D <--> V[Memoria corto plazo<br/>MemorySaver por thread_id]
+    E <--> V
+    C <--> W[Memoria largo plazo<br/>Chroma semántica]
 ```
 
-## Componentes
+## 2. Orquestación multi-agente (supervisor + especialistas)
 
-| Componente | Descripción |
-|---|---|
-| **Interfaz (Web / CLI)** | La web (`app.py`, Streamlit) y la CLI (`src/agent.py`) comparten el mismo pipeline. La web muestra burbujas de chat, preguntas rápidas y un panel de **Fuentes consultadas**; la memoria vive en `st.session_state` por sesión de navegador. |
-| **Agente Orquestador** | Modelo Qwen3 servido por Groq (API compatible con OpenAI). Temperatura 0.1 para respuestas deterministas y `reasoning_effort="none"` para desactivar el razonamiento extendido. |
-| **Retriever léxico** | Carga el manual, lo divide por secciones y puntúa cada chunk combinando **normalización de acentos**, **stopwords**, **raíces (prefijos)** y un **mapa de sinónimos** del dominio. Devuelve los top-k más relevantes y vacío si no hay coincidencias de contenido. |
-| **Base de conocimiento** | `data/manual_operaciones_seguros.txt` con 6 secciones (asistencia en ruta, siniestros, coberturas y exclusiones, reembolsos, primas y vigencia, red de prestadores). |
-| **consultar_valor_uf_actual** | Consulta la API externa mindicador.cl para obtener el valor vigente de la UF. Incluye User-Agent, timeouts y reintentos. |
-| **API mindicador.cl** | Servicio público chileno que entrega indicadores económicos diarios, incluyendo el valor de la UF. |
-| **Memoria conversacional** | **Buffer de ventana deslizante** (`ConversationBufferWindowMemory`) que conserva los últimos `MEMORY_MAX_TURNS` turnos (por defecto 5) y descarta los más antiguos. Se persiste en `.memory/session.json` para sobrevivir entre ejecuciones. |
+```mermaid
+flowchart LR
+    START([Inicio]) --> SUP[Supervisor]
+    SUP -->|clasifica y delega| ROUTE{route}
+    ROUTE --> COB[Coberturas]
+    ROUTE --> SIN[Siniestros]
+    ROUTE --> REE[Reembolsos]
+    ROUTE --> FIN[Financiero]
+    ROUTE --> GEN[General]
+    COB --> E([Fin])
+    SIN --> E
+    REE --> E
+    FIN --> E
+    GEN --> E
+```
 
-## Tipo de memoria: Buffer de ventana deslizante
+- **Supervisor:** nodo que decide el especialista. Usa un *router híbrido*:
+  1. **Reglas deterministas** por palabras clave con prioridad (más fiables y
+     explicables): `financiero` > `coberturas` > `siniestros` > `reembolsos`.
+  2. **LLM con salida estructurada** (`RouteDecision`, Pydantic) solo para
+     consultas ambiguas.
+  Los mensajes de seguimiento cortos ("¿y eso en pesos?") se combinan con el
+  turno anterior para conservar el contexto.
+- **Especialistas:** cada uno es un agente ReAct (`create_agent`) con su propio
+  *system prompt* y subconjunto de herramientas. Comparten el estado
+  conversacional (memoria de corto plazo) a través del checkpointer del grafo.
 
-La memoria implementada en `src/memory.py` es un **buffer de ventana deslizante**
-(`ConversationBufferWindowMemory`). Se eligió este tipo porque:
-
-- **Acota el contexto**: mantiene solo los últimos `N` intercambios, evitando que
-  el prompt crezca indefinidamente y dispare costos o límites de tokens.
-- **Conversación multi-turno**: permite resolver referencias como *"¿y eso en pesos?"*,
-  que dependen del turno anterior.
-- **Persistencia opcional**: guarda la sesión en disco (`.memory/session.json`),
-  de modo que el hilo conversacional se recupera al reiniciar.
-
-Parámetros configurables (en `.env`):
-
-| Variable | Descripción | Default |
+| Especialista | Dominio | Herramientas |
 |---|---|---|
-| `MEMORY_MAX_TURNS` | Número de intercambios (usuario + asistente) que se conservan | `5` |
-| `MEMORY_PERSIST_PATH` | Ruta del archivo de persistencia de la sesión | `.memory/session.json` |
+| `coberturas` | Qué cubre / qué no cubre | `buscar_manual` |
+| `siniestros` | Protocolo, denuncia, grúa, talleres | `buscar_manual`, `consultar_red_talleres` |
+| `reembolsos` | Reembolsos, primas, vigencia | `buscar_manual` |
+| `financiero` | Montos en UF/CLP | `buscar_manual`, `consultar_valor_uf_actual`, `convertir_uf_a_clp` |
+| `general` | Saludos y consultas generales | todas |
 
-## Recuperación (RAG léxico)
+## 3. Recuperación híbrida (RAG con embeddings)
 
-`src/rag_pipeline.py` implementa recuperación **sin dependencias externas**:
+```mermaid
+flowchart TD
+    Q[Consulta] --> LEX[Búsqueda léxica<br/>normalización + stopwords<br/>+ raíces + sinónimos]
+    Q --> EMB[Embedding mistral-embed]
+    EMB --> VS[(Chroma persistente<br/>data/chroma)]
+    VS --> FILT[Filtro por score<br/>threshold 0.68]
+    LEX --> FUSE[Fusión]
+    FILT --> FUSE
+    FUSE --> CTX[Contexto para el agente<br/>o vacío si no hay coincidencias]
+```
 
-1. **Normalización**: minúsculas y eliminación de acentos (`unicodedata`), de modo
-   que `poliza` coincida con `Póliza`.
-2. **Stopwords**: se descartan palabras vacías (`el`, `es`, `para`, `cual`…), que
-   antes dominaban el puntaje y desplazaban a la sección correcta.
-3. **Raíces / prefijos**: coincidencia parcial (`reemb` une `reembolso` y
-   `reembolsan`; `grua` une `grúa` y `gruas`).
-4. **Sinónimos de dominio**: `siniestro → accidente/choque`,
-   `cobertura → cubre`, `grúa → auxilio/remolque`, etc.
-5. **Ponderación de título**: una coincidencia en el título de la sección suma
-   puntaje extra.
+1. **Chunking:** secciones del manual → `RecursiveCharacterTextSplitter`
+   (`CHUNK_SIZE=700`, `CHUNK_OVERLAP=120`).
+2. **Indexación:** cada *chunk* se embebe con `mistral-embed` y se persiste en
+   Chroma. El índice se reconstruye solo si cambia el manual (*fingerprint*
+   SHA-256).
+3. **Búsqueda:** similitud coseno con umbral (`VECTOR_SCORE_THRESHOLD=0.68`)
+   para descartar fragmentos fuera de dominio.
+4. **Fusión:** prioridad léxica (códigos exactos) + relleno vectorial, con
+   deduplicación. Sin coincidencias → lista vacía (**anti-alucinación**).
 
-Si ninguna palabra de contenido coincide, se devuelve una lista vacía y el
-agente responde que no tiene la información (comportamiento anti-alucinación).
+## 4. Memoria
 
-## Flujo de Ejecución
+```mermaid
+flowchart LR
+    T[Turno del usuario] --> ST[Memoria corto plazo<br/>MemorySaver + thread_id]
+    T --> RECALL[Recall semántico]
+    RECALL --> LT[(Chroma memoria<br/>largo plazo)]
+    LT --> CTX[Contexto inyectado]
+    CTX --> LLM[Agente]
+    ST --> LLM
+    LLM --> SAVE[remember: guarda el intercambio]
+    SAVE --> LT
+```
 
-1. El asegurado escribe una pregunta en la web o la CLI.
-2. El sistema recupera los chunks más relevantes del manual (RAG).
-3. Si la consulta involucra UF o conversión a pesos, se invoca `consultar_valor_uf_actual` y se añade al contexto.
-4. El LLM recibe system prompt + historial + contexto + pregunta.
-5. El agente genera una respuesta fundamentada y el turno se guarda en memoria.
-6. Si la información no está en las fuentes, el agente lo declara explícitamente (mitigación de alucinaciones).
+| Tipo | Implementación | Alcance |
+|---|---|---|
+| **Corto plazo** | `MemorySaver` (LangGraph) por `thread_id` | Sesión actual |
+| **Corto plazo (buffer)** | `ConversationBufferWindowMemory` | Ventana de N turnos, persistida |
+| **Largo plazo** | `LongTermMemory` (Chroma + embeddings) | Entre sesiones, por significado |
+
+## 5. Flujo de ejecución
+
+1. El asegurado escribe en la web o la CLI (con un `thread_id` de sesión).
+2. El **Assistant** elige el modo (multi-agente por defecto).
+3. En multi-agente, el **supervisor** clasifica y delega al **especialista**.
+4. El especialista usa **herramientas**: RAG híbrido, valor UF y/o conversión.
+5. Se recupera memoria de **largo plazo** relevante y se inyecta como contexto.
+6. El LLM genera una respuesta fundamentada (o declara que no tiene la
+   información).
+7. El turno se guarda en la memoria de **corto** y **largo** plazo.
+
+## 6. Decisiones de diseño
+
+| Decisión | Justificación |
+|---|---|
+| **Mistral para chat y embeddings** | Una sola API key (gratuita), API compatible con OpenAI y endpoint de embeddings de calidad en español (`mistral-embed`). |
+| **Chroma persistente** | Base vectorial simple de operar, con persistencia en disco y soporte de LangChain (`langchain-chroma`). |
+| **Recuperación híbrida** | Los embeddings capturan paráfrasis; la capa léxica preserva códigos exactos (teléfonos, `5 UF`) y el comportamiento anti-alucinación. |
+| **Router híbrido** | Las reglas deterministas son fiables y explicables para los casos frecuentes; el LLM resuelve la ambigüedad. |
+| **LangGraph (no CrewAI)** | El entorno es Python 3.14 y CrewAI exige <3.14. LangGraph ya está disponible y cubre el patrón supervisor. |
+| **Dos memorias** | La de corto plazo da continuidad en la sesión; la de largo plazo recupera información por significado entre sesiones. |

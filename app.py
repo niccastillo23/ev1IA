@@ -1,128 +1,236 @@
-"""Web interface (Streamlit) for the fleet operations assistant.
+"""Web interface (Streamlit) for the Seguros Express assistant.
 
-Local chat UI that reuses the same RAG + tools + memory pipeline
-as the CLI (`src/agent.py`).
+Minimalist UI with a light/dark theme toggle (clean typography, neutral
+palette, single accent). Reuses the same agent / orchestrator + memory
+pipeline as the CLI (`src/agent.py`).
 
 Run with:  streamlit run app.py
 """
 
+import uuid
+
 import streamlit as st
 
-from src.agent import answer_query, initialize_client
-from src.memory import ConversationBufferWindowMemory
-from src.rag_pipeline import build_retriever
+from src.agent import Assistant
 
 st.set_page_config(
-    page_title="Asistente de Seguros — Seguros Express",
-    page_icon="🛡️",
+    page_title="Seguros Express · Asistente",
+    page_icon="▪",
     layout="centered",
     initial_sidebar_state="expanded",
 )
 
-CUSTOM_CSS = """
-<style>
-    #MainMenu, footer, [data-testid="stHeader"] {visibility: hidden;}
+# Palette per theme. The CSS below is written once using these variables.
+THEME_VARS = {
+    "dark": """
+        --bg: #0b0c0e;
+        --surface: #141517;
+        --surface-2: #17191d;
+        --surface-hover: #212328;
+        --border: #26282e;
+        --border-strong: #3a3d44;
+        --text: #e7e8ea;
+        --muted: #a1a6ad;
+        --faint: #6f747c;
+        --mark-bg: #e7e8ea;
+        --mark-text: #0b0c0e;
+    """,
+    "light": """
+        --bg: #ffffff;
+        --surface: #fafafa;
+        --surface-2: #ffffff;
+        --surface-hover: #f6f6f7;
+        --border: #ececec;
+        --border-strong: #c9ccd1;
+        --text: #111827;
+        --muted: #6b7280;
+        --faint: #9ca3af;
+        --mark-bg: #111827;
+        --mark-text: #ffffff;
+    """,
+}
 
-    .block-container {padding-top: 1.5rem; max-width: 860px;}
-
-    .le-header {
-        display: flex; align-items: center; gap: 18px;
-        padding: 22px 26px; border-radius: 18px;
-        background: linear-gradient(135deg, #0f3d26 0%, #1b7f4b 100%);
-        color: #ffffff; margin-bottom: 6px;
-        box-shadow: 0 8px 24px rgba(15, 61, 38, 0.18);
+CUSTOM_RULES = """
+    html, body, [class*="css"], .stApp, [data-testid="stAppViewContainer"] {
+        font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+            Roboto, "Helvetica Neue", Arial, sans-serif;
+        background: var(--bg);
+        color: var(--text);
     }
-    .le-header .le-logo {font-size: 2.4rem; line-height: 1;}
-    .le-header h1 {font-size: 1.45rem; margin: 0; color: #ffffff; font-weight: 700;}
-    .le-header p {margin: 2px 0 0 0; font-size: 0.9rem; color: #d8f0e2;}
 
-    .le-tag {
-        display: inline-block; margin-top: 10px; padding: 4px 12px;
-        border-radius: 999px; background: #e7f4ec; color: #14613a;
-        font-size: 0.75rem; font-weight: 600; letter-spacing: .3px;
+    #MainMenu, footer, header[data-testid="stHeader"] {visibility: hidden; height: 0;}
+    [data-testid="stDecoration"], [data-testid="stStatusWidget"] {display: none;}
+
+    .block-container {max-width: 760px; padding-top: 2rem; padding-bottom: 7rem;}
+
+    /* ----------------------------------------------------- layout bg */
+    /* Streamlit paints some containers with the theme's base colour;
+       force them to follow our variable so no white bars appear. */
+    .stApp,
+    [data-testid="stAppViewContainer"],
+    [data-testid="stMain"],
+    [data-testid="stMainBlockContainer"],
+    [data-testid="stAppViewBlockContainer"] {
+        background: var(--bg) !important;
+    }
+    [data-testid="stBottom"],
+    [data-testid="stBottom"] > div,
+    [data-testid="stBottomBlockContainer"] {
+        background: var(--bg) !important;
     }
 
-    [data-testid="stChatMessage"] {
-        border-radius: 14px; padding: 4px 6px;
+    /* ---------------------------------------------------------- header */
+    .se-header {
+        display: flex; align-items: center; justify-content: space-between;
+        padding-bottom: 18px; border-bottom: 1px solid var(--border);
+    }
+    .se-brand {display: flex; align-items: center; gap: 12px;}
+    .se-mark {
+        width: 34px; height: 34px; border-radius: 9px;
+        background: var(--mark-bg); color: var(--mark-text);
+        display: flex; align-items: center; justify-content: center;
+        font-size: 12px; font-weight: 600; letter-spacing: .5px;
+    }
+    .se-name {font-size: 15px; font-weight: 600; letter-spacing: -.01em; line-height: 1.1; color: var(--text);}
+    .se-sub {font-size: 12px; color: var(--muted); margin-top: 2px;}
+    .se-meta {font-size: 11px; color: var(--faint); text-align: right; line-height: 1.4;}
+
+    /* ------------------------------------------------------- messages */
+    [data-testid="stChatMessageAvatarUser"],
+    [data-testid="stChatMessageAvatarAssistant"] {display: none !important;}
+    [data-testid="stChatMessage"] {background: transparent; border: none; padding: 0.35rem 0;}
+    .se-role {
+        font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+        color: var(--faint); font-weight: 600; margin-bottom: 4px;
     }
 
+    /* --------------------------------------------------------- inputs */
+    div.stButton > button {
+        width: 100%; text-align: left; justify-content: flex-start;
+        background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px;
+        padding: 10px 14px; color: var(--text); font-size: 14px; font-weight: 400;
+        transition: border-color .15s ease, background .15s ease;
+    }
+    div.stButton > button:hover {
+        border-color: var(--border-strong); background: var(--surface-hover); color: var(--text);
+    }
+    div.stButton > button:focus {box-shadow: none;}
+
+    [data-testid="stChatInput"],
+    [data-testid="stChatInput"] > div {
+        background: var(--surface-2) !important;
+        border: 1px solid var(--border) !important;
+        border-radius: 12px !important;
+    }
+    [data-testid="stChatInput"] [data-baseweb="base-input"],
+    [data-testid="stChatInput"] [data-baseweb="textarea"],
+    [data-testid="stChatInput"] [data-baseweb="base-input"] > div {
+        background: var(--surface-2) !important;
+    }
+    [data-testid="stChatInput"] textarea {
+        color: var(--text) !important; background: transparent !important;
+    }
+    [data-testid="stChatInput"] textarea::placeholder {color: var(--faint) !important;}
+
+    [data-testid="stExpander"] {
+        border: 1px solid var(--border); border-radius: 10px; background: var(--surface);
+    }
+    [data-testid="stExpander"] summary {font-size: 13px; color: var(--muted);}
+
+    /* -------------------------------------------------------- sidebar */
     section[data-testid="stSidebar"] {
-        background: #f4f9f6; border-right: 1px solid #e2efe8;
+        background: var(--surface); border-right: 1px solid var(--border);
     }
+    section[data-testid="stSidebar"], section[data-testid="stSidebar"] * {color: var(--text);}
+    section[data-testid="stSidebar"] [data-testid="stCaptionContainer"] * {color: var(--muted);}
+    section[data-testid="stSidebar"] hr {border-color: var(--border);}
 
-    .le-footer {
-        text-align: center; color: #7b8a83; font-size: 0.75rem;
-        margin-top: 24px;
+    .se-footer {
+        text-align: center; color: var(--faint); font-size: 11px;
+        margin-top: 28px; letter-spacing: .02em;
     }
-</style>
 """
-st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 
-@st.cache_resource(show_spinner=False)
-def get_client():
-    """Create the Groq client once per server process."""
-    return initialize_client()
+def build_css(theme: str) -> str:
+    return f"<style>:root {{{THEME_VARS[theme]}}}{CUSTOM_RULES}</style>"
 
 
-@st.cache_resource(show_spinner=False)
-def get_retriever():
-    """Load and index the manual once per server process."""
-    return build_retriever()
-
-
-def get_memory() -> ConversationBufferWindowMemory:
-    """Return this browser session's sliding-window memory."""
-    if "memory" not in st.session_state:
-        st.session_state.memory = ConversationBufferWindowMemory(
-            max_turns=5, persist_path=None
-        )
-    return st.session_state.memory
+@st.cache_resource(show_spinner="Inicializando el asistente…")
+def get_assistant(mode: str) -> Assistant:
+    """Create one Assistant per orchestration mode (cached per process)."""
+    return Assistant(mode=mode, use_long_term=True)
 
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "pending_prompt" not in st.session_state:
     st.session_state.pending_prompt = None
+if "thread_id" not in st.session_state:
+    st.session_state.thread_id = str(uuid.uuid4())
+if "theme" not in st.session_state:
+    st.session_state.theme = "dark"
+
+st.markdown(
+    build_css(st.session_state.theme), unsafe_allow_html=True
+)
 
 
 SUGGESTIONS = [
     "¿Cuál es el número para pedir grúa?",
-    "¿Cuánto es el deducible por siniestro?",
+    "¿Cuánto es el deducible por siniestro en pesos?",
     "¿Qué documentos necesito para un reembolso?",
     "¿Está cubierta la conducción en estado de ebriedad?",
 ]
 
 
+def _section_title(doc: str) -> str:
+    """First meaningful line of a fragment, skipping the '[Fragmento i]' tag."""
+    for line in (doc or "").splitlines():
+        line = line.strip()
+        if line and not line.startswith("[Fragmento"):
+            return line[:90]
+    return ""
+
+
 def render_sources(result: dict) -> None:
-    """Show the retrieved fragments and external tool usage."""
+    """Show the routing decision, tools used and retrieved fragments."""
+    route = result.get("route")
+    tools = result.get("tools_used") or []
     docs = result.get("sources") or []
     used_uf = result.get("used_uf")
-    if not docs and not used_uf:
+    if not (route or tools or docs or used_uf):
         return
-    with st.expander("🔎 Fuentes consultadas"):
+    with st.expander("Fuentes y trazabilidad"):
+        if route:
+            st.markdown(f"**Especialista** · `{route}`")
+        if tools:
+            st.markdown(f"**Herramientas** · {', '.join(tools)}")
         for doc in docs:
-            title = doc.splitlines()[0].strip() if doc else ""
-            st.markdown(f"- **{title}**")
+            title = _section_title(doc)
+            if title:
+                st.markdown(f"**Manual** · {title}")
         if used_uf:
-            st.markdown(f"- **UF externa (mindicador.cl):** {result.get('uf_info')}")
+            st.markdown(f"**UF (mindicador.cl)** · {result.get('uf_info')}")
 
 
-def handle_prompt(prompt: str) -> None:
+def handle_prompt(prompt: str, assistant: Assistant) -> None:
     """Run the pipeline for a new prompt and render the exchange."""
     st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user", avatar="🧑"):
+    with st.chat_message("user"):
+        st.markdown('<div class="se-role">Tú</div>', unsafe_allow_html=True)
         st.markdown(prompt)
 
-    with st.chat_message("assistant", avatar="🛡️"):
-        with st.spinner("Consultando manual y fuentes…"):
+    with st.chat_message("assistant"):
+        st.markdown('<div class="se-role">Asistente</div>', unsafe_allow_html=True)
+        with st.spinner("Consultando…"):
             try:
-                result = answer_query(
-                    get_client(), get_retriever(), get_memory(), prompt
-                )
+                result = assistant.ask(prompt, thread_id=st.session_state.thread_id)
             except Exception as exc:  # noqa: BLE001
                 result = {
-                    "answer": f"⚠️ Ocurrió un error al procesar tu consulta: {exc}",
+                    "answer": f"No se pudo procesar la consulta: {exc}",
+                    "route": "",
+                    "tools_used": [],
                     "sources": [],
                     "used_uf": False,
                     "uf_info": None,
@@ -134,6 +242,8 @@ def handle_prompt(prompt: str) -> None:
         {
             "role": "assistant",
             "content": result["answer"],
+            "route": result.get("route", ""),
+            "tools_used": result.get("tools_used", []),
             "sources": result.get("sources", []),
             "used_uf": result.get("used_uf", False),
             "uf_info": result.get("uf_info"),
@@ -144,40 +254,63 @@ def handle_prompt(prompt: str) -> None:
 # ---------------------------------------------------------------- Header
 st.markdown(
     """
-    <div class="le-header">
-        <div class="le-logo">🛡️</div>
-        <div>
-            <h1>Seguros Express</h1>
-            <p>Asistente Inteligente del Asegurado</p>
+    <div class="se-header">
+        <div class="se-brand">
+            <div class="se-mark">SE</div>
+            <div>
+                <div class="se-name">Seguros Express</div>
+                <div class="se-sub">Asistente del asegurado</div>
+            </div>
+        </div>
+        <div class="se-meta">
+            RAG · multi-agente<br/>memoria corta y larga
         </div>
     </div>
     """,
     unsafe_allow_html=True,
 )
-st.markdown(
-    '<span class="le-tag">RAG + UF en tiempo real · Memoria conversacional</span>',
-    unsafe_allow_html=True,
-)
 
 # --------------------------------------------------------------- Sidebar
 with st.sidebar:
-    st.markdown("### 🛡️ Seguros Express")
-    st.caption("Asistente Inteligente del Asegurado")
-    st.divider()
-    st.markdown("**Modelo**\n\n`qwen/qwen3.6-27b` · vía Groq")
-    st.markdown("**Memoria**\n\nVentana deslizante · 5 turnos")
-    st.markdown("**Fuentes**\n\nManual del asegurado · API UF")
-    st.divider()
-    if st.button("🧹 Limpiar conversación", use_container_width=True):
-        st.session_state.messages = []
-        st.session_state.memory = ConversationBufferWindowMemory(
-            max_turns=5, persist_path=None
-        )
+    theme_label = st.radio(
+        "Tema",
+        options=("Oscuro", "Claro"),
+        index=0 if st.session_state.theme == "dark" else 1,
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+    new_theme = "dark" if theme_label == "Oscuro" else "light"
+    if new_theme != st.session_state.theme:
+        st.session_state.theme = new_theme
         st.rerun()
+
+    st.divider()
+    mode = st.radio(
+        "Orquestación",
+        options=("multi", "single"),
+        format_func=lambda m: "Multi-agente" if m == "multi" else "Agente único",
+        index=0,
+        label_visibility="collapsed",
+    )
+    st.divider()
+    st.caption("**Modelo**\nmistral-small-latest · mistral-embed")
+    st.caption("**Fuentes**\nManual del asegurado · API UF")
+    st.caption("**Memoria**\nCorto plazo (sesión) · Largo plazo (semántica)")
+    st.divider()
+    if st.button("Limpiar conversación"):
+        st.session_state.messages = []
+        st.session_state.thread_id = str(uuid.uuid4())
+        st.rerun()
+
+assistant = get_assistant(mode)
 
 # ------------------------------------------------------------ Chat render
 if not st.session_state.messages:
-    st.markdown("#### ¿En qué puedo ayudarte hoy?")
+    st.markdown(
+        '<p style="color:var(--muted);font-size:14px;margin:22px 0 10px;">'
+        "Haz una consulta sobre tu póliza o empieza con un ejemplo.</p>",
+        unsafe_allow_html=True,
+    )
     cols = st.columns(2)
     for index, suggestion in enumerate(SUGGESTIONS):
         if cols[index % 2].button(
@@ -187,23 +320,24 @@ if not st.session_state.messages:
             st.rerun()
 
 for message in st.session_state.messages:
-    avatar = "🧑" if message["role"] == "user" else "🚚"
-    with st.chat_message(message["role"], avatar=avatar):
+    role_label = "Tú" if message["role"] == "user" else "Asistente"
+    with st.chat_message(message["role"]):
+        st.markdown(f'<div class="se-role">{role_label}</div>', unsafe_allow_html=True)
         st.markdown(message["content"])
         if message["role"] == "assistant":
             render_sources(message)
 
 # -------------------------------------------------------------- New input
-prompt = st.chat_input("Escribe tu consulta sobre seguros, coberturas o siniestros…")
+prompt = st.chat_input("Escribe tu consulta…")
 if st.session_state.pending_prompt:
     prompt = st.session_state.pending_prompt
     st.session_state.pending_prompt = None
 
 if prompt:
-    handle_prompt(prompt)
+    handle_prompt(prompt, assistant)
 
 st.markdown(
-    '<div class="le-footer">Proyecto académico ISY0101 · '
-    "Las respuestas se basan únicamente en las fuentes disponibles.</div>",
+    '<div class="se-footer">Proyecto académico ISY0101 · '
+    "Respuestas basadas únicamente en las fuentes disponibles.</div>",
     unsafe_allow_html=True,
 )
