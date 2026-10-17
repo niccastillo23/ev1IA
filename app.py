@@ -12,6 +12,13 @@ import uuid
 import streamlit as st
 
 from src.agent import Assistant
+from src.config import (
+    EMBEDDING_MODEL,
+    LLM_MODEL,
+    OLLAMA_MODEL,
+    PROVIDER,
+    USE_LONG_TERM,
+)
 
 st.set_page_config(
     page_title="Seguros Express · Asistente",
@@ -57,6 +64,25 @@ CUSTOM_RULES = """
         background: var(--bg);
         color: var(--text);
     }
+
+    /* Streamlit's own theme variables must follow our palette, otherwise native
+       components (markdown, chat, widgets) keep the light base colours set in
+       .streamlit/config.toml and text becomes unreadable in dark mode. */
+    :root {
+        --text-color: var(--text) !important;
+        --background-color: var(--bg) !important;
+        --secondary-background-color: var(--surface) !important;
+    }
+    [data-testid="stMarkdownContainer"],
+    [data-testid="stMarkdownContainer"] p,
+    [data-testid="stMarkdownContainer"] li,
+    [data-testid="stMarkdownContainer"] span,
+    [data-testid="stMarkdownContainer"] strong,
+    [data-testid="stChatMessage"] p,
+    [data-testid="stChatMessage"] li {
+        color: var(--text);
+    }
+    [data-testid="stMarkdownContainer"] a {color: var(--text);}
 
     #MainMenu, footer, header[data-testid="stHeader"] {visibility: hidden; height: 0;}
     [data-testid="stDecoration"], [data-testid="stStatusWidget"] {display: none;}
@@ -149,6 +175,13 @@ CUSTOM_RULES = """
         text-align: center; color: var(--faint); font-size: 11px;
         margin-top: 28px; letter-spacing: .02em;
     }
+
+    /* -------------------------------------------------- orchestration */
+    [data-testid="stMain"] [data-testid="stWidgetLabel"] p {
+        font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+        color: var(--muted); font-weight: 600;
+    }
+    .se-orch-hint {font-size: 12px; color: var(--faint); text-align: right; line-height: 1.45;}
 """
 
 
@@ -159,7 +192,7 @@ def build_css(theme: str) -> str:
 @st.cache_resource(show_spinner="Inicializando el asistente…")
 def get_assistant(mode: str) -> Assistant:
     """Create one Assistant per orchestration mode (cached per process)."""
-    return Assistant(mode=mode, use_long_term=True)
+    return Assistant(mode=mode, use_long_term=USE_LONG_TERM)
 
 
 if "messages" not in st.session_state:
@@ -170,6 +203,8 @@ if "thread_id" not in st.session_state:
     st.session_state.thread_id = str(uuid.uuid4())
 if "theme" not in st.session_state:
     st.session_state.theme = "dark"
+if "answers" not in st.session_state:
+    st.session_state.answers = {}
 
 st.markdown(
     build_css(st.session_state.theme), unsafe_allow_html=True
@@ -196,12 +231,15 @@ def _section_title(doc: str) -> str:
 def render_sources(result: dict) -> None:
     """Show the routing decision, tools used and retrieved fragments."""
     route = result.get("route")
+    plan = result.get("plan") or []
     tools = result.get("tools_used") or []
     docs = result.get("sources") or []
     used_uf = result.get("used_uf")
-    if not (route or tools or docs or used_uf):
+    if not (route or plan or tools or docs or used_uf):
         return
     with st.expander("Fuentes y trazabilidad"):
+        if plan and len(plan) > 1:
+            st.markdown(f"**Plan** · {' → '.join(plan)}")
         if route:
             st.markdown(f"**Especialista** · `{route}`")
         if tools:
@@ -223,18 +261,25 @@ def handle_prompt(prompt: str, assistant: Assistant) -> None:
 
     with st.chat_message("assistant"):
         st.markdown('<div class="se-role">Asistente</div>', unsafe_allow_html=True)
-        with st.spinner("Consultando…"):
-            try:
-                result = assistant.ask(prompt, thread_id=st.session_state.thread_id)
-            except Exception as exc:  # noqa: BLE001
-                result = {
-                    "answer": f"No se pudo procesar la consulta: {exc}",
-                    "route": "",
-                    "tools_used": [],
-                    "sources": [],
-                    "used_uf": False,
-                    "uf_info": None,
-                }
+        cached = st.session_state.answers.get(prompt)
+        if cached is not None:
+            result = cached
+        else:
+            with st.spinner("Consultando…"):
+                try:
+                    result = assistant.ask(prompt, thread_id=st.session_state.thread_id)
+                except Exception as exc:  # noqa: BLE001
+                    result = {
+                        "answer": f"No se pudo procesar la consulta: {exc}",
+                        "route": "",
+                        "plan": [],
+                        "tools_used": [],
+                        "sources": [],
+                        "used_uf": False,
+                        "uf_info": None,
+                    }
+            # Memoize identical questions to avoid repeated API calls in a demo.
+            st.session_state.answers[prompt] = result
         st.markdown(result["answer"])
         render_sources(result)
 
@@ -243,6 +288,7 @@ def handle_prompt(prompt: str, assistant: Assistant) -> None:
             "role": "assistant",
             "content": result["answer"],
             "route": result.get("route", ""),
+            "plan": result.get("plan", []),
             "tools_used": result.get("tools_used", []),
             "sources": result.get("sources", []),
             "used_uf": result.get("used_uf", False),
@@ -263,12 +309,29 @@ st.markdown(
             </div>
         </div>
         <div class="se-meta">
-            RAG · multi-agente<br/>memoria corta y larga
+            RAG · agentes con herramientas<br/>memoria corta y larga
         </div>
     </div>
     """,
     unsafe_allow_html=True,
 )
+
+# ------------------------------------------------- Orchestration selector
+_orch_left, _orch_right = st.columns([2, 1])
+with _orch_left:
+    mode = st.radio(
+        "Orquestación",
+        options=("multi", "single"),
+        format_func=lambda m: "Multi-agente" if m == "multi" else "Agente único",
+        horizontal=True,
+        index=0,
+    )
+with _orch_right:
+    st.markdown(
+        '<div class="se-orch-hint">Multi-agente: supervisor + plan + ejecutor<br/>'
+        'Agente único: un solo agente ReAct</div>',
+        unsafe_allow_html=True,
+    )
 
 # --------------------------------------------------------------- Sidebar
 with st.sidebar:
@@ -285,15 +348,10 @@ with st.sidebar:
         st.rerun()
 
     st.divider()
-    mode = st.radio(
-        "Orquestación",
-        options=("multi", "single"),
-        format_func=lambda m: "Multi-agente" if m == "multi" else "Agente único",
-        index=0,
-        label_visibility="collapsed",
-    )
-    st.divider()
-    st.caption("**Modelo**\nmistral-small-latest · mistral-embed")
+    chat_model = OLLAMA_MODEL if PROVIDER == "ollama" else LLM_MODEL
+    provider_label = "Ollama (local)" if PROVIDER == "ollama" else "NVIDIA NIM"
+    st.caption(f"**Modelo**\n{chat_model} · {provider_label}")
+    st.caption(f"**Embeddings**\n{EMBEDDING_MODEL}")
     st.caption("**Fuentes**\nManual del asegurado · API UF")
     st.caption("**Memoria**\nCorto plazo (sesión) · Largo plazo (semántica)")
     st.divider()

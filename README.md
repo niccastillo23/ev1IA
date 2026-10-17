@@ -16,17 +16,23 @@ mindicador.cl para resolver deducibles y montos en pesos.
 El sistema evoluciona el RAG de la Evaluación Parcial 1 (recuperación léxica) a
 una arquitectura de agentes de la Evaluación Parcial 2:
 
-- **Recuperación híbrida**: embeddings (Mistral + Chroma) **+** búsqueda léxica.
-- **Agente ReAct** con *tool calling* (LangChain v1 + LangGraph).
-- **Multi-agente**: un **supervisor** que enruta a especialistas.
+- **Recuperación híbrida**: embeddings (Chroma) **+** búsqueda léxica.
+- **Planificación** (`plan → execute`): un **supervisor** clasifica y arma un
+  plan de pasos; un **ejecutor determinista** invoca las herramientas en orden y
+  un paso final de composición redacta la respuesta fundamentada.
+- **Herramientas de consulta y de escritura**: además del RAG y la UF, el
+  asistente **registra siniestros** y los consulta (persistencia en disco).
+- **Agente ReAct** con *tool calling* (LangChain v1 + LangGraph) como modo
+  alternativo de agente único.
 - **Memoria**: corto plazo (checkpointer) y largo plazo (semántica en Chroma).
+- **Chat con proveedor conmutable**: local (Ollama) o remoto (NVIDIA NIM).
 
 ## Tecnologías
 
 | Componente | Tecnología |
 |---|---|
-| Chat (LLM) | Mistral `mistral-small-latest` (API compatible con OpenAI) |
-| Embeddings | Mistral `mistral-embed` (1024 dims) |
+| Chat (LLM) | Local **Ollama** `qwen2.5:14b-instruct` (por defecto) o remoto **NVIDIA NIM** `openai/gpt-oss-20b` |
+| Embeddings | NVIDIA NIM `nvidia/llama-nemotron-embed-vl-1b-v2` (2048 dims, API OpenAI-compatible) |
 | Base vectorial | Chroma (persistente) |
 | RAG | Chunking de LangChain + retriever híbrido (vector + léxico) |
 | Agentes | LangChain v1 (`create_agent`) + LangGraph (`MemorySaver`) |
@@ -43,18 +49,18 @@ Asegurado → Web (Streamlit) / CLI → Assistant (fachada)
                     ┌────────────────┴──────────────────┐
                     │                                   │
              Multi-agente (default)               Agente único
-             Supervisor (router)                   ReAct + tools
+       Supervisor (router + plan)                 ReAct + tools
+                    │                                   │
+             Ejecutor determinista                      │
+        (invoca herramientas en orden)                  │
+                    │                                   │
+             Composición (LLM)  ◄────── respuesta ──────┘
                     │
-   ┌────────────┬───┴────────┬──────────────┐
- Coberturas  Siniestros   Reembolsos     Financiero        General
-   │            │             │             │                │
-   └────────────┴─────────────┴─────────────┴────────────────┘
-                    │
-        ┌───────────┴────────────┐
-   RAG híbrido                Tool UF
- (embeddings + léxico)     (mindicador.cl)
-        │
-  manual_operaciones_seguros.txt
+   ┌────────────────┼─────────────────┬─────────────────┐
+ RAG híbrido     Tool UF          Red de talleres   Registro siniestros
+(emb. + léxico) (mindicador.cl)   (por ciudad)     (data/siniestros.json)
+   │
+ manual_operaciones_seguros.txt
 ```
 
 Ver [docs/arquitectura.md](docs/arquitectura.md) para el diagrama Mermaid
@@ -62,8 +68,8 @@ detallado, el flujo de orquestación y las decisiones de diseño.
 
 ## Instalación
 
-Requisitos: **Python 3.10+** y una **API key de Mistral**
-([console.mistral.ai/api-keys](https://console.mistral.ai/api-keys), gratuita).
+Requisitos: **Python 3.10+** y una **API key de NVIDIA NIM**
+([build.nvidia.com](https://build.nvidia.com), gratuita, formato `nvapi-...`).
 
 ```bash
 python -m venv .venv
@@ -75,22 +81,43 @@ cp .env.example .env      # y completa LLM_API_KEY
 ### Archivo `.env`
 
 ```env
-LLM_BASE_URL="https://api.mistral.ai/v1"
-LLM_API_KEY="tu-api-key-de-mistral"
-LLM_MODEL="mistral-small-latest"
-LLM_MODEL_SMALL="ministral-8b-latest"
+# Proveedor del chat: "ollama" (local) o "nvidia" (remoto)
+PROVIDER="ollama"
+OLLAMA_BASE_URL="http://localhost:11434"
+OLLAMA_MODEL="qwen2.5:14b-instruct"
+OLLAMA_NUM_CTX="8192"
 
-EMBEDDING_MODEL="mistral-embed"
+# Chat remoto (se usa si PROVIDER="nvidia")
+LLM_BASE_URL="https://integrate.api.nvidia.com/v1"
+LLM_API_KEY="nvapi-..."
+LLM_MODEL="openai/gpt-oss-20b"
+LLM_MODEL_SMALL="openai/gpt-oss-20b"
+
+EMBEDDING_MODEL="nvidia/llama-nemotron-embed-vl-1b-v2"
 VECTOR_DB_PATH="data/chroma"
 CHUNK_SIZE="700"
 CHUNK_OVERLAP="120"
 RETRIEVAL_TOP_K="4"
-VECTOR_SCORE_THRESHOLD="0.68"
+VECTOR_SCORE_THRESHOLD="0.30"
+
+MAX_TOKENS="700"
+AGENT_RECURSION_LIMIT="6"
+USE_LLM_ROUTER="false"
+USE_LONG_TERM="false"
 
 MEMORY_MAX_TURNS="5"
 MEMORY_PERSIST_PATH=".memory/session.json"
 LONGTERM_DB_PATH="data/chroma_memory"
 ```
+
+> **Chat local (opcional, más rápido).** Con `PROVIDER="ollama"` el chat corre en
+> tu equipo vía [Ollama](https://ollama.com) (`brew install ollama` +
+> `ollama pull qwen2.5:14b-instruct`), sin red ni coste. Los **embeddings** siempre usan
+> el endpoint OpenAI-compatible (NVIDIA NIM).
+
+> **Topes de costo.** `MAX_TOKENS` y `AGENT_RECURSION_LIMIT` acotan el gasto por
+> consulta (evitan respuestas largas y bucles de herramientas); `USE_LLM_ROUTER`
+> y `USE_LONG_TERM` permiten desactivar llamadas extra durante la demo.
 
 ## Ejecución
 
@@ -120,7 +147,8 @@ PYTHONPATH=. python src/agent.py
 ## RAG con embeddings
 
 `src/vectorstore.py` construye (una sola vez y de forma persistente) un índice
-Chroma sobre el manual usando `mistral-embed`:
+Chroma sobre el manual usando un endpoint de embeddings OpenAI-compatible
+(`EMBEDDING_MODEL`), en espacio **coseno**:
 
 1. El manual se divide en secciones y luego en *chunks* con solape
    (`RecursiveCharacterTextSplitter`).
@@ -146,6 +174,8 @@ información.
 | `consultar_valor_uf_actual()` | Valor vigente de la UF (mindicador.cl) |
 | `convertir_uf_a_clp(cantidad_uf)` | Convierte UF → CLP con el valor vigente |
 | `consultar_red_talleres(ciudad)` | Talleres autorizados por ciudad |
+| `registrar_siniestro(patente, tipo, descripcion, ciudad)` | **Escritura**: registra un siniestro y devuelve un folio `SIN-YYYYMMDD-NNNN` (persistente) |
+| `consultar_siniestros(patente)` | Consulta los siniestros registrados de una patente |
 
 ### Agente único (`src/agent_graph.py`)
 
@@ -154,20 +184,24 @@ completo de herramientas y memoria de corto plazo vía `MemorySaver`.
 
 ### Multi-agente — supervisor (`src/orchestrator.py`)
 
-Patrón **supervisor + especialistas** en LangGraph:
+Patrón **plan → execute** con ejecución determinista en LangGraph:
 
 ```
-START → supervisor → {coberturas | siniestros | reembolsos | financiero | general} → END
+START → supervisor (clasifica + arma el plan) → executor → END
 ```
 
 - El **supervisor** clasifica la consulta con un *router híbrido*: primero
   reglas deterministas por palabras clave (fiable y explicable) y, ante
-  ambigüedad, un LLM con salida estructurada (`RouteDecision`).
-- Cada **especialista** es un agente ReAct con un *system prompt* y un
-  subconjunto de herramientas adaptados a su dominio.
-- Todos comparten el mismo estado conversacional, por lo que el enrutamiento
-  considera el hilo previo (los seguimientos cortos como *"¿y eso en pesos?"*
-  conservan el contexto).
+  ambigüedad, un LLM con salida estructurada (`RouteDecision`). Además arma un
+  **plan** (p. ej. una consulta compuesta "registra un choque y dime el
+  deducible en pesos" produce `["siniestros", "financiero"]`).
+- El **ejecutor** invoca las herramientas en el orden del plan **por código**
+  (no por *tool calling*), lo que garantiza fiabilidad y baja latencia con
+  modelos locales; luego una llamada de **composición** redacta la respuesta
+  final solo con la información recuperada (anti-alucinación).
+- Todos comparten el mismo estado conversacional, por lo que el enrutamiento y
+  la ejecución consideran el hilo previo (los seguimientos cortos como *"¿y eso
+  en pesos?"* conservan el contexto y resuelven el referente).
 
 ## Memoria
 
@@ -192,6 +226,7 @@ respuesta, guarda el nuevo intercambio.
 | 5 | Coberturas | "¿Cuánto cubre un choque?" | Daños a terceros/propios, gastos médicos hasta 200 UF |
 | 6 | Exclusiones | "¿Cubren la conducción en estado de ebriedad?" | No, es exclusión |
 | 7 | Tolerancia a acentos | "cual es el deducible por siniestro" | 5 UF por evento |
+| 8 | Escritura + plan compuesto | "Registra un choque de la patente ABCD12 y dime el deducible en pesos" | Folio `SIN-...` **+** 5 UF → CLP (plan `["siniestros","financiero"]`) |
 
 ## Ejecutar Tests
 
@@ -206,15 +241,20 @@ herméticos (sin red ni API key).
 
 ```
 ├── data/
-│   └── manual_operaciones_seguros.txt   # Manual del asegurado
-│   └── chroma/                          # Índice vectorial (generado)
+│   ├── manual_operaciones_seguros.txt   # Manual del asegurado
+│   ├── siniestros.json                  # Registro de siniestros (herramienta de escritura)
+│   ├── chroma/                          # Índice vectorial (generado)
 │   └── chroma_memory/                   # Memoria de largo plazo (generada)
 ├── docs/
-│   └── arquitectura.md                  # Documentación técnica (Mermaid)
+│   ├── arquitectura.md                  # Documentación técnica (Mermaid)
+│   ├── build_presentacion.py            # Genera la presentación (PPTX)
+│   ├── presentacion_ep2.pptx            # Presentación EP2 (4 diapositivas)
+│   ├── build_informe.py                 # Genera el scaffold del informe (DOCX)
+│   └── informe_ep2.docx                 # Informe técnico EP2 (scaffold)
 ├── app.py                               # Interfaz web (Streamlit)
 ├── src/
 │   ├── config.py                        # Configuración y variables de entorno
-│   ├── vectorstore.py                   # Embeddings Mistral + Chroma
+│   ├── vectorstore.py                   # Embeddings (OpenAI-compatible) + Chroma coseno
 │   ├── rag_pipeline.py                  # Recuperación híbrida (vector + léxico)
 │   ├── tools.py                         # Funciones base (manual + UF)
 │   ├── agent_tools.py                   # Herramientas LangChain del agente

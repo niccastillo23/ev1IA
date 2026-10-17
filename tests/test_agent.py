@@ -3,12 +3,19 @@
 import os
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch, MagicMock
 
+import src.agent_tools as agent_tools
 from src.agent_graph import extract_metadata, sanitize_answer
-from src.agent_tools import _uf_number
+from src.agent_tools import (
+    _next_folio,
+    _uf_number,
+    consultar_siniestros,
+    registrar_siniestro,
+)
 from src.memory import ConversationBufferWindowMemory
-from src.orchestrator import _is_greeting, _keyword_route, _raw_query
+from src.orchestrator import _build_plan, _is_greeting, _keyword_route, _raw_query
 from src.rag_pipeline import _fuse, build_retriever
 from src.tools import consultar_manual_operaciones, consultar_valor_uf_actual
 
@@ -222,6 +229,69 @@ class TestSanitizeAnswer(unittest.TestCase):
     def test_keeps_correct_term(self):
         text = "El deducible es 5 UF (Unidades de Fomento)."
         self.assertEqual(sanitize_answer(text), text)
+
+
+class TestRegistrarSiniestro(unittest.TestCase):
+    """Write-side tool: persists a siniestro and can be queried back."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self._orig = agent_tools.SINIESTROS_DB_PATH
+        agent_tools.SINIESTROS_DB_PATH = Path(self._tmp.name) / "siniestros.json"
+
+    def tearDown(self):
+        agent_tools.SINIESTROS_DB_PATH = self._orig
+        self._tmp.cleanup()
+
+    def test_registrar_returns_folio_and_persists(self):
+        out = registrar_siniestro.invoke(
+            {"patente": "abcd12", "tipo": "choque", "descripcion": "colisión leve", "ciudad": "Santiago"}
+        )
+        self.assertIn("SIN-", out)
+        self.assertTrue(agent_tools.SINIESTROS_DB_PATH.exists())
+        saved = agent_tools._load_siniestros()
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(saved[0]["patente"], "ABCD12")
+
+    def test_consultar_lists_registered(self):
+        registrar_siniestro.invoke(
+            {"patente": "ABCD12", "tipo": "robo", "descripcion": "espejo", "ciudad": "Valparaíso"}
+        )
+        out = consultar_siniestros.invoke({"patente": "abcd12"})
+        self.assertIn("ABCD12", out)
+        self.assertIn("SIN-", out)
+
+    def test_consultar_without_records(self):
+        out = consultar_siniestros.invoke({"patente": "ZZZZ99"})
+        self.assertIn("No hay siniestros", out)
+
+    def test_folios_increment(self):
+        self.assertTrue(_next_folio([]).endswith("-0001"))
+        first = registrar_siniestro.invoke(
+            {"patente": "AAAA11", "tipo": "choque", "descripcion": "x", "ciudad": ""}
+        )
+        second = registrar_siniestro.invoke(
+            {"patente": "AAAA11", "tipo": "choque", "descripcion": "y", "ciudad": ""}
+        )
+        self.assertIn("-0001", first)
+        self.assertIn("-0002", second)
+
+
+class TestPlanner(unittest.TestCase):
+    """The planner sequences specialists for compound (multi-step) requests."""
+
+    def test_simple_query_is_single_step(self):
+        self.assertEqual(_build_plan("coberturas", "que cubre un choque"), ["coberturas"])
+        self.assertEqual(_build_plan("financiero", "deducible en pesos"), ["financiero"])
+
+    def test_write_only_query(self):
+        self.assertEqual(_build_plan("siniestros", "registra un choque"), ["siniestros"])
+
+    def test_compound_query_is_two_steps(self):
+        plan = _build_plan(
+            "siniestros", "registra el choque y dime cuanto pagare de deducible en pesos"
+        )
+        self.assertEqual(plan, ["siniestros", "financiero"])
 
 
 if __name__ == "__main__":

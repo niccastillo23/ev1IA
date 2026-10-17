@@ -116,6 +116,7 @@ class LongTermMemory:
                 collection_name=self.collection_name,
                 embedding_function=self._embeddings,
                 persist_directory=self.persist_path,
+                collection_metadata={"hnsw:space": "cosine"},
             )
         except Exception as exc:  # noqa: BLE001 - memory is optional
             print(f"  [Memoria] Largo plazo deshabilitada: {exc}")

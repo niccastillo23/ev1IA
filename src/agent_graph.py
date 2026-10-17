@@ -9,11 +9,21 @@ LangGraph checkpointer keyed by ``thread_id``; long-term memory is an optional
 import re
 
 from langchain.agents import create_agent
-from langchain_mistralai import ChatMistralAI
+from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
 
 from src.agent_tools import ALL_TOOLS
-from src.config import LLM_API_KEY, LLM_MODEL
+from src.config import (
+    AGENT_RECURSION_LIMIT,
+    LLM_API_KEY,
+    LLM_BASE_URL,
+    LLM_MODEL,
+    MAX_TOKENS,
+    OLLAMA_BASE_URL,
+    OLLAMA_MODEL,
+    OLLAMA_NUM_CTX,
+    PROVIDER,
+)
 
 # The model occasionally mangles "Unidades de Fomento" (e.g. "Folicación",
 # "Fenglobales"). Since the canonical term is fixed, enforce it deterministically.
@@ -31,6 +41,12 @@ def sanitize_answer(text: str) -> str:
     return _UF_TERM_RE.sub(_fix, text)
 
 SYSTEM_PROMPT = """\
+REGLA ABSOLUTA (máxima prioridad): antes de responder CUALQUIER consulta sobre
+seguros DEBES llamar a la herramienta `buscar_manual` (y, si corresponde,
+`consultar_red_talleres`, `consultar_valor_uf_actual` o `convertir_uf_a_clp`).
+Nunca respondas de memoria ni inventes datos, números de contacto, montos o
+nombres: si la herramienta no devuelve la información, dilo claramente.
+
 Eres el Asistente Inteligente de Seguros Express S.A.
 Ayudas a los asegurados con el manual del asegurado: coberturas, exclusiones,
 siniestros, deducibles, reembolsos, primas, pólizas, grúa, asistencia en ruta
@@ -43,25 +59,50 @@ REGLAS:
    encuentras la información, dilo claramente. NO inventes datos.
 3. Si el usuario pide un monto en pesos o una cantidad de UF, usa
    `convertir_uf_a_clp` en lugar de calcular el valor de la UF por tu cuenta.
+   Si pide registrar, reportar o declarar un siniestro (choque, robo, vuelco),
+   usa `registrar_siniestro` con la patente, el tipo y una breve descripción;
+   si falta algún dato obligatorio, pídelo antes de registrar.
 4. Responde en español, de forma clara, concisa y profesional.
 5. Si la pregunta no está relacionada con seguros, indica amablemente que solo
    puedes asistir con temas de Seguros Express.
 6. Copia literalmente los términos, nombres y montos tal como aparecen en el
    manual (por ejemplo "Unidades de Fomento", "UF", "5 UF", "800-500-100"). No
    los reformules, traduzcas ni reemplaces por sinónimos inventados.
-7. Cuando pregunten qué cubre un siniestro o el alcance de la póliza, empieza
+7. NUNCA escribas la llamada a una herramienta como texto (por ejemplo JSON con
+   "name" y "parameters"). Para usar una herramienta, invócala con el mecanismo
+   real de *tool calling*; si no puedes, responde con lo que tengas.
+8. Cuando pregunten qué cubre un siniestro o el alcance de la póliza, empieza
    listando TODAS las coberturas incluidas que aparezcan en el contexto (daños
    a terceros, daños propios, robo, gastos médicos hasta 200 UF, asistencia en
    ruta), y luego detalla el caso puntual. No omitas coberturas del contexto.
 """
 
 
-def build_model():
-    """Return the Mistral chat model used by the agents."""
-    return ChatMistralAI(
-        model=LLM_MODEL,
+def build_model(model: str = None, max_tokens: int = None):
+    """Return the chat model used by the agents, selected via ``PROVIDER``.
+
+    - ``ollama``: local model (``ChatOllama``) -> fast, offline, no API cost.
+    - anything else: OpenAI-compatible endpoint (``ChatOpenAI``, NVIDIA NIM).
+
+    ``max_tokens`` caps the generated output; a smaller model can be passed for
+    cheap tasks (e.g. the router).
+    """
+    if PROVIDER == "ollama":
+        from langchain_ollama import ChatOllama
+
+        return ChatOllama(
+            model=model or OLLAMA_MODEL,
+            base_url=OLLAMA_BASE_URL,
+            temperature=0,
+            num_predict=max_tokens or MAX_TOKENS,
+            num_ctx=OLLAMA_NUM_CTX,
+        )
+    return ChatOpenAI(
+        model=model or LLM_MODEL,
         api_key=LLM_API_KEY,
+        base_url=LLM_BASE_URL,
         temperature=0,
+        max_tokens=max_tokens or MAX_TOKENS,
     )
 
 
@@ -126,7 +167,10 @@ def run_agent(
 
     result = agent.invoke(
         {"messages": [("user", augmented)]},
-        config={"configurable": {"thread_id": thread_id}},
+        config={
+            "configurable": {"thread_id": thread_id},
+            "recursion_limit": AGENT_RECURSION_LIMIT,
+        },
     )
     messages = result["messages"]
     answer = messages[-1].content
@@ -137,4 +181,4 @@ def run_agent(
     if long_term is not None:
         long_term.remember(f"Pregunta: {query}\nRespuesta: {answer}")
 
-    return {"answer": answer, **extract_metadata(messages)}
+    return {"answer": answer, "plan": [], **extract_metadata(messages)}

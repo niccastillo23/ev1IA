@@ -17,6 +17,12 @@ __pycache__/
 data/chroma/
 data/chroma_memory/
 
+# Runtime data (herramienta de escritura: registro de siniestros)
+data/siniestros.json
+
+# Office lock/temp files
+~$*
+
 # Virtual environments
 .venv/
 venv/

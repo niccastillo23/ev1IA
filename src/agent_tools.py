@@ -2,13 +2,17 @@
 
 Thin wrappers around the manual retriever and the external UF API, plus a
 couple of derived tools (UF -> CLP conversion and workshop lookup) that the
-agent can call autonomously.
+agent can call autonomously. It also exposes a *write* tool that persists a
+siniestro to disk, so the agent covers query + reasoning + writing.
 """
 
+import json
 import re
+from datetime import datetime
 
 from langchain_core.tools import tool
 
+from src.config import SINIESTROS_DB_PATH
 from src.rag_pipeline import build_retriever
 from src.tools import consultar_valor_uf_actual as _consultar_uf
 
@@ -86,9 +90,80 @@ def consultar_red_talleres(ciudad: str) -> str:
     return _format_docs(docs)
 
 
+def _load_siniestros() -> list:
+    """Read the siniestros store (returns [] if missing/corrupt)."""
+    path = SINIESTROS_DB_PATH
+    if not path.exists():
+        return []
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
+def _save_siniestros(items: list) -> None:
+    path = SINIESTROS_DB_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _next_folio(items: list) -> str:
+    """Sequential folio per day, e.g. SIN-20260116-0003."""
+    day = datetime.now().strftime("%Y%m%d")
+    prefix = f"SIN-{day}-"
+    seq = sum(1 for item in items if str(item.get("folio", "")).startswith(prefix)) + 1
+    return f"{prefix}{seq:04d}"
+
+
+@tool
+def registrar_siniestro(patente: str, tipo: str, descripcion: str, ciudad: str = "") -> str:
+    """Registra (ESCRITURA) un siniestro y devuelve un folio de seguimiento.
+
+    Úsala cuando el asegurado pida reportar, declarar, denunciar o registrar un
+    siniestro (choque, robo, vuelco, etc.). Persiste el registro en el sistema.
+    """
+    items = _load_siniestros()
+    folio = _next_folio(items)
+    items.append(
+        {
+            "folio": folio,
+            "patente": patente.strip().upper(),
+            "tipo": tipo.strip(),
+            "descripcion": descripcion.strip(),
+            "ciudad": (ciudad or "no indicada").strip(),
+            "estado": "registrado",
+            "fecha": datetime.now().isoformat(timespec="seconds"),
+        }
+    )
+    _save_siniestros(items)
+    return (
+        f"Siniestro registrado con folio {folio}. "
+        f"Patente {patente.strip().upper()}, tipo {tipo.strip()}, estado: registrado."
+    )
+
+
+@tool
+def consultar_siniestros(patente: str) -> str:
+    """Consulta los siniestros ya registrados para una patente.
+
+    Úsala para verificar el estado o el historial de siniestros de un asegurado.
+    """
+    target = patente.strip().upper()
+    items = [it for it in _load_siniestros() if str(it.get("patente", "")).upper() == target]
+    if not items:
+        return f"No hay siniestros registrados para la patente {target}."
+    lines = [
+        f"- {it.get('folio')}: {it.get('tipo')} ({it.get('estado')}) el {it.get('fecha')}"
+        for it in items
+    ]
+    return f"Siniestros registrados para {target}:\n" + "\n".join(lines)
+
+
 ALL_TOOLS = [
     buscar_manual,
     consultar_valor_uf_actual,
     convertir_uf_a_clp,
     consultar_red_talleres,
+    registrar_siniestro,
+    consultar_siniestros,
 ]
